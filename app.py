@@ -112,8 +112,8 @@ st.markdown("""
     display: inline-flex; align-items: center; gap: 4px;
     font-size: 12px; font-weight: 600; padding: 5px 11px;
     border-radius: 8px; background: #1a1d2b; border: 1px solid #252a3d;
-    color: #c8cfe8; text-decoration: none !important; transition: all 0.15s;
-    position: relative; cursor: pointer;
+    color: #c8cfe8; transition: all 0.15s;
+    position: relative; cursor: default;
 }
 .stock-chip:hover { background: #1f2540; border-color: #4f9cf9; color: #4f9cf9; }
 
@@ -244,7 +244,7 @@ def generate_analysis(hour: str, articles: list) -> dict:
 
     try:
         msg  = get_claude().messages.create(
-            model="claude-sonnet-4-5",
+            model="claude-3-5-sonnet-20241022",
             max_tokens=600,
             messages=[{"role": "user", "content": prompt}],
         )
@@ -338,13 +338,11 @@ def stock_chips_html(stocks) -> str:
         if not name:
             continue
 
-        url     = f"https://finance.naver.com/search/searchList.naver?query={quote(name)}"
         tooltip = f'<span class="tooltip">{reason}</span>' if reason else ""
         chips.append(
-            f'<a href="{url}" target="_blank" class="stock-chip">'
+            f'<span class="stock-chip">'
             f'{name}{tooltip}'
-            f'<span style="opacity:.5;font-size:10px;margin-left:2px;">↗</span>'
-            f'</a>'
+            f'</span>'
         )
 
     return f'<div class="stock-row">{"".join(chips)}</div>'
