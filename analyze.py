@@ -38,7 +38,7 @@ claude   = anthropic.Anthropic(api_key=ANTHROPIC_KEY)
 
 def load_news() -> list:
     """최근 24시간 뉴스 로드 (본문 포함)"""
-    cutoff = (datetime.now(KST) - timedelta(hours=HOURS_BACK)).isoformat()
+    cutoff = (datetime.now(KST) - timedelta(hours=HOURS_BACK)).strftime("%Y-%m-%d %H:%M")
     result = (
         supabase.table("news_articles")
         .select("id, source, title, pubdate_kst, collected_at, link, summary")
@@ -308,18 +308,13 @@ def main():
         return
     print(f"총 {len(articles)}건 뉴스 로드 완료")
 
-    # 시간대별 그룹화 (collected_at 기준 - 수집 시간으로 분류)
+    # 시간대별 그룹화 (collected_at 기준 - KST 문자열 그대로 사용)
     hour_map = defaultdict(list)
     for art in articles:
         raw = art.get("collected_at") or art.get("pubdate_kst")
         if not raw:
             continue
-        try:
-            dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
-            dt_kst = dt.astimezone(KST)
-            hour_key = dt_kst.strftime("%Y-%m-%d %H:00")
-        except Exception:
-            hour_key = raw[:13] + ":00"
+        hour_key = raw[:13] + ":00"   # "2026-03-25 19:05" → "2026-03-25 19:00"
         hour_map[hour_key].append(art)
 
     print(f"시간대 {len(hour_map)}개 발견")
