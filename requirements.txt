@@ -1,0 +1,6 @@
+requests
+supabase
+anthropic
+streamlit
+pandas
+openpyxl
