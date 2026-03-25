@@ -21,8 +21,8 @@ from collections import defaultdict
 KST        = timezone(timedelta(hours=9))
 HOURS_BACK = 24
 
-MODEL_HAIKU  = "claude-haiku-4-5"    # Step 1, 3 (빠르고 저렴)
-MODEL_SONNET = "claude-sonnet-4-5"   # Step 2 (정확하고 깊이있음)
+MODEL_HAIKU  = "claude-3-5-haiku-20241022"   # Step 1, 3 (빠르고 저렴)
+MODEL_SONNET = "claude-3-5-sonnet-20241022"  # Step 2 (정확하고 깊이있음)
 
 SUPABASE_URL  = os.environ["SUPABASE_URL"]
 SUPABASE_KEY  = os.environ["SUPABASE_KEY"]
@@ -38,12 +38,12 @@ claude   = anthropic.Anthropic(api_key=ANTHROPIC_KEY)
 
 def load_news() -> list:
     """최근 24시간 뉴스 로드 (본문 포함)"""
-    cutoff = (datetime.now(KST) - timedelta(hours=HOURS_BACK)).strftime("%Y-%m-%d %H:%M")
+    cutoff = (datetime.now(KST) - timedelta(hours=HOURS_BACK)).isoformat()
     result = (
         supabase.table("news_articles")
-        .select("id, source, title, pubdate_kst, link, summary")
-        .gte("pubdate_kst", cutoff)
-        .order("pubdate_kst", desc=True)
+        .select("id, source, title, pubdate_kst, collected_at, link, summary")
+        .gte("collected_at", cutoff)
+        .order("collected_at", desc=True)
         .limit(1000)
         .execute()
     )
@@ -308,12 +308,19 @@ def main():
         return
     print(f"총 {len(articles)}건 뉴스 로드 완료")
 
-    # 시간대별 그룹화
+    # 시간대별 그룹화 (collected_at 기준 - 수집 시간으로 분류)
     hour_map = defaultdict(list)
     for art in articles:
-        if art.get("pubdate_kst"):
-            hour_key = art["pubdate_kst"][:13] + ":00"
-            hour_map[hour_key].append(art)
+        raw = art.get("collected_at") or art.get("pubdate_kst")
+        if not raw:
+            continue
+        try:
+            dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            dt_kst = dt.astimezone(KST)
+            hour_key = dt_kst.strftime("%Y-%m-%d %H:00")
+        except Exception:
+            hour_key = raw[:13] + ":00"
+        hour_map[hour_key].append(art)
 
     print(f"시간대 {len(hour_map)}개 발견")
 
