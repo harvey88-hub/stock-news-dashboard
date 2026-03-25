@@ -69,6 +69,9 @@ def is_recent(pub_date_str, now_kst):
     dt = parse_pubdate(pub_date_str)
     if dt is None:
         return False
+    # timezone 없는 날짜는 KST로 간주
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=KST)
     cutoff = now_kst - timedelta(hours=HOURS_BACK)
     return dt >= cutoff
 
@@ -77,6 +80,9 @@ def format_pubdate_kst(pub_date_str):
     dt = parse_pubdate(pub_date_str)
     if dt is None:
         return pub_date_str
+    # timezone 없는 날짜는 KST로 간주
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=KST)
     return dt.astimezone(KST).strftime("%Y-%m-%d %H:%M")
 
 
@@ -172,10 +178,20 @@ def save_to_supabase(articles):
     if not articles:
         return 0
 
-    # link 기준 중복 방지 (upsert)
+    # 배치 내 중복 링크 제거 (같은 링크가 여러 번 들어오면 upsert 오류 발생)
+    seen   = set()
+    unique = []
+    for a in articles:
+        link = a.get("link", "")
+        if link and link not in seen:
+            seen.add(link)
+            unique.append(a)
+        elif not link:
+            unique.append(a)   # 링크 없는 기사는 그대로 포함
+
     result = (
         client.table("news_articles")
-        .upsert(articles, on_conflict="link")
+        .upsert(unique, on_conflict="link")
         .execute()
     )
     return len(result.data) if result.data else 0
