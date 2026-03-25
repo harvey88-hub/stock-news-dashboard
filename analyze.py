@@ -21,8 +21,8 @@ from collections import defaultdict
 KST        = timezone(timedelta(hours=9))
 HOURS_BACK = 24
 
-MODEL_HAIKU  = "claude-3-5-haiku-20241022"   # Step 1, 3 (빠르고 저렴)
-MODEL_SONNET = "claude-3-5-sonnet-20241022"  # Step 2 (정확하고 깊이있음)
+MODEL_HAIKU  = "claude-haiku-4-5"   # Step 1, 3 (빠르고 저렴)
+MODEL_SONNET = "claude-sonnet-4-5"  # Step 2 (정확하고 깊이있음)
 
 SUPABASE_URL  = os.environ["SUPABASE_URL"]
 SUPABASE_KEY  = os.environ["SUPABASE_KEY"]
