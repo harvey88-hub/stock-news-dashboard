@@ -113,8 +113,30 @@ st.markdown("""
     font-size: 12px; font-weight: 600; padding: 5px 11px;
     border-radius: 8px; background: #1a1d2b; border: 1px solid #252a3d;
     color: #c8cfe8; text-decoration: none !important; transition: all 0.15s;
+    position: relative; cursor: pointer;
 }
 .stock-chip:hover { background: #1f2540; border-color: #4f9cf9; color: #4f9cf9; }
+
+/* 종목 툴팁 */
+.stock-chip .tooltip {
+    visibility: hidden; opacity: 0;
+    background: #1e2540; color: #c8cfe8;
+    border: 1px solid #3a4060; border-radius: 8px;
+    padding: 6px 10px; font-size: 11px; font-weight: 400;
+    white-space: nowrap; position: absolute;
+    bottom: calc(100% + 6px); left: 50%;
+    transform: translateX(-50%);
+    z-index: 999; pointer-events: none;
+    transition: opacity 0.15s;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+}
+.stock-chip .tooltip::after {
+    content: ''; position: absolute; top: 100%; left: 50%;
+    transform: translateX(-50%);
+    border: 5px solid transparent;
+    border-top-color: #3a4060;
+}
+.stock-chip:hover .tooltip { visibility: visible; opacity: 1; }
 
 /* 기사 링크 */
 .art-link {
@@ -293,7 +315,9 @@ def sector_html(sector: str) -> str:
 
 
 def stock_chips_html(stocks) -> str:
-    """종목 목록 → 네이버 증권 링크 칩 HTML"""
+    """종목 목록 → 네이버 증권 링크 칩 + mouseover 툴팁 HTML
+    stocks 형식: ["종목명"] 또는 [{"name":"종목명","reason":"이유"}]
+    """
     if not stocks:
         return ""
     if isinstance(stocks, str):
@@ -301,12 +325,29 @@ def stock_chips_html(stocks) -> str:
             stocks = json.loads(stocks)
         except Exception:
             return ""
-    chips = "".join(
-        f'<a href="https://finance.naver.com/search/searchList.naver?query={quote(s)}" '
-        f'target="_blank" class="stock-chip">{s} <span style="opacity:.5;font-size:10px;">↗</span></a>'
-        for s in stocks if s
-    )
-    return f'<div class="stock-row">{chips}</div>'
+
+    chips = []
+    for s in stocks:
+        if isinstance(s, dict):
+            name   = s.get("name",   "").strip()
+            reason = s.get("reason", "").strip()
+        else:
+            name   = str(s).strip()
+            reason = ""
+
+        if not name:
+            continue
+
+        url     = f"https://finance.naver.com/search/searchList.naver?query={quote(name)}"
+        tooltip = f'<span class="tooltip">{reason}</span>' if reason else ""
+        chips.append(
+            f'<a href="{url}" target="_blank" class="stock-chip">'
+            f'{name}{tooltip}'
+            f'<span style="opacity:.5;font-size:10px;margin-left:2px;">↗</span>'
+            f'</a>'
+        )
+
+    return f'<div class="stock-row">{"".join(chips)}</div>'
 
 
 def get_top_themes(issues: dict, n: int = 5) -> list:
