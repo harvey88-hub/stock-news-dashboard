@@ -182,7 +182,7 @@ st.subheader(f"📰 뉴스 목록 ({len(df)}건)")
 # 언론사별 탭
 tabs = st.tabs(["전체"] + sorted(df["source"].unique().tolist()))
 
-def render_articles(articles_df):
+def render_articles(articles_df, tab_prefix="tab"):
     for _, row in articles_df.iterrows():
         with st.container(border=True):
             col_info, col_btn = st.columns([5, 1])
@@ -199,7 +199,7 @@ def render_articles(articles_df):
                     st.info(f"🤖 **AI 요약:** {row['ai_summary']}")
 
             with col_btn:
-                btn_key = f"summarize_{row['id']}"
+                btn_key = f"summarize_{tab_prefix}_{row['id']}"
                 if st.button("AI 요약", key=btn_key, use_container_width=True):
                     with st.spinner("요약 중..."):
                         result = ai_summarize_single(row["title"], row.get("summary", ""))
@@ -209,9 +209,9 @@ def render_articles(articles_df):
 
 # 전체 탭
 with tabs[0]:
-    render_articles(df)
+    render_articles(df, tab_prefix="all")
 
 # 언론사별 탭
 for i, source in enumerate(sorted(df["source"].unique().tolist()), start=1):
     with tabs[i]:
-        render_articles(df[df["source"] == source])
+        render_articles(df[df["source"] == source], tab_prefix=f"src_{i}")
