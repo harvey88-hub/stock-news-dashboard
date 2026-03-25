@@ -158,6 +158,13 @@ st.markdown("""
 /* Streamlit 기본 여백 줄이기 */
 .block-container { padding-top: 1.5rem !important; }
 [data-testid="stExpander"] { background: #13151f; border: 1px solid #1e2130; border-radius: 10px; }
+
+/* Streamlit 상단 툴바 숨기기 */
+[data-testid="stToolbar"]      { display: none !important; }
+[data-testid="stDecoration"]   { display: none !important; }
+[data-testid="stStatusWidget"] { display: none !important; }
+#MainMenu                      { display: none !important; }
+footer                         { display: none !important; }
 </style>
 """, unsafe_allow_html=True)
 
