@@ -222,7 +222,7 @@ def generate_analysis(hour: str, articles: list) -> dict:
 
     try:
         msg  = get_claude().messages.create(
-            model="claude-opus-4-5",
+            model="claude-sonnet-4-5",
             max_tokens=600,
             messages=[{"role": "user", "content": prompt}],
         )

@@ -1,4 +1,4 @@
-﻿name: Stock News Collector
+name: Stock News Collector
 
 on:
   schedule:
@@ -18,10 +18,17 @@ jobs:
           python-version: "3.11"
 
       - name: Install packages
-        run: pip install requests supabase
+        run: pip install requests supabase anthropic
 
-      - name: Run collector
+      - name: Step 1 - 뉴스 수집
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: python rss_collector.py
+
+      - name: Step 2 - AI 자동 분석
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: python analyze.py
