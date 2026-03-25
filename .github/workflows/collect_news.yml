@@ -4,9 +4,8 @@ on:
   schedule:
     - cron: "0 * * * *"
   workflow_dispatch:
-
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  repository_dispatch:
+    types: [cron-trigger]
 
 jobs:
   collect:
