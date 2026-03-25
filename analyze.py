@@ -217,50 +217,79 @@ def step2_deep_analysis(hour: str, key_articles: list) -> dict:
 
 def step3_verify_listed_stocks(stocks: list) -> list:
     """
-    AI가 추출한 종목명이 실제 KOSPI/KOSDAQ 상장 종목인지
-    Haiku로 빠르게 검증하여 미상장·오류 종목을 걸러냅니다.
+    AI가 추출한 종목명을 KOSPI/KOSDAQ 상장 종목으로 폭넓게 매핑합니다.
+
+    - 직접 상장 종목 → 그대로 유지
+    - 비상장이지만 관련 상장사 있음 → 상장사로 대체 (이유에 관계 명시)
+      예) 두나무 → 카카오 (두나무 최대주주)
+    - 관련 상장사 없는 비상장/외국기업 → 제외
     """
     if not stocks:
         return []
 
-    names = [s["name"] for s in stocks]
+    stocks_info = [
+        {"name": s["name"], "reason": s.get("reason", "")}
+        for s in stocks
+    ]
 
-    prompt = f"""다음 종목명 중 현재 KOSPI 또는 KOSDAQ에 실제로 상장된 종목만 골라주세요.
+    prompt = f"""다음 종목/기업 목록을 검토하여 투자자가 참고할 수 있는 국내 상장 종목으로 매핑해주세요.
 
-검증 대상: {json.dumps(names, ensure_ascii=False)}
+검증 대상:
+{json.dumps(stocks_info, ensure_ascii=False, indent=2)}
 
-규칙:
-- 실제 상장 종목명과 정확히 일치하거나 통용되는 이름만 포함
-- 상장폐지, 비상장, 외국 기업, 불분명한 종목은 제외
-- 종목명이 약간 다르면 정확한 상장 종목명으로 수정 (예: "SK하이닉스" → 그대로)
-- 반드시 JSON 배열로만 응답 (예: ["SK하이닉스", "삼성전자"])
+처리 규칙:
+1. KOSPI/KOSDAQ 직접 상장 종목 → 정확한 상장 종목명으로 그대로 포함
+2. 비상장 기업이지만 KOSPI/KOSDAQ 상장된 지배주주·모회사·주요 관련사가 있으면 → 그 상장사로 대체
+   예) 두나무(비상장, Upbit 운영) → 카카오(두나무 최대주주) 또는 한화투자증권
+   예) 스페이스X → 관련 국내 상장사 없으면 제외
+3. 관련 국내 상장사가 없는 비상장/외국 기업 → 제외
+4. 종목명 오탈자 → 정확한 상장 종목명으로 수정
 
-상장 종목만 반환:"""
+반드시 JSON 형식으로만 응답:
+[
+  {{"name": "상장종목명", "reason": "이슈와의 관련 이유 (대체된 경우 관계 포함) 25자 이내"}},
+  ...
+]
+
+예시 응답:
+[
+  {{"name": "카카오", "reason": "두나무(Upbit) 최대주주"}},
+  {{"name": "SK하이닉스", "reason": "HBM 주요 공급사"}}
+]"""
 
     try:
         msg  = claude.messages.create(
             model=MODEL_HAIKU,
-            max_tokens=200,
+            max_tokens=400,
             messages=[{"role": "user", "content": prompt}],
         )
         text = msg.content[0].text.strip()
 
-        # JSON 배열 파싱
+        # JSON 파싱
+        if "```" in text:
+            parts = text.split("```")
+            text  = parts[1] if len(parts) > 1 else text
+            if text.lower().startswith("json"):
+                text = text[4:]
         if "[" in text:
             text = text[text.index("["):text.rindex("]") + 1]
-        verified_names = json.loads(text)
 
-        # 검증된 이름 기준으로 원래 reason 유지
-        name_to_reason = {s["name"]: s["reason"] for s in stocks}
+        raw      = json.loads(text)
         verified = []
-        for name in verified_names:
-            if isinstance(name, str) and name.strip():
-                verified.append({
-                    "name":   name.strip(),
-                    "reason": name_to_reason.get(name.strip(), ""),
-                })
+        seen     = set()
 
-        print(f"  → 종목 검증: {[s['name'] for s in stocks]} → {[s['name'] for s in verified]}")
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            name   = item.get("name",   "").strip()
+            reason = item.get("reason", "").strip()
+            if name and name not in seen:
+                seen.add(name)
+                verified.append({"name": name, "reason": reason})
+
+        before = [s["name"] for s in stocks]
+        after  = [s["name"] for s in verified]
+        print(f"  → 종목 검증: {before} → {after}")
         return verified
 
     except Exception as e:
