@@ -1,11 +1,15 @@
-﻿name: Stock News Collector
+name: Stock News Collector
 
 on:
   schedule:
-    - cron: "0 * * * *"
+    - cron: "0 * * * *"      # 매시간 뉴스 수집 + AI 분석
+    - cron: "0 21 * * *"     # 매일 06:00 KST (UTC 21:00) 상장 종목 업데이트
   workflow_dispatch:
   repository_dispatch:
     types: [cron-trigger]
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   collect:
@@ -34,3 +38,25 @@ jobs:
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: python analyze.py
+
+  update-stocks:
+    runs-on: ubuntu-latest
+    if: github.event.schedule == '0 21 * * *' || github.event_name == 'workflow_dispatch'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install packages
+        run: pip install requests supabase
+
+      - name: KRX 상장 종목 업데이트
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          KRX_API_KEY: ${{ secrets.KRX_API_KEY }}
+        run: python fetch_stocks.py

@@ -3,12 +3,13 @@ AI 자동 분석 스크립트 (3단계)
 ================================
 Step 1 (Haiku)  : 시간대 전체 기사에서 가장 중요한 이슈 1개 선정 + 관련 기사 추출
 Step 2 (Sonnet) : 선별된 기사 제목 + 본문으로 배경·원인·전망 심층 분석
-Step 3 (Haiku)  : 추출된 종목이 KOSPI/KOSDAQ 실제 상장 종목인지 필터링
+Step 3 (DB+AI)  : listed_stocks DB로 직접 매칭 → 미매칭 시 Haiku로 관련 상장사 탐색
 """
 
 import os
 import json
 import time
+import difflib
 import anthropic
 from supabase import create_client
 from datetime import datetime, timezone, timedelta
@@ -48,6 +49,21 @@ def load_news() -> list:
         .execute()
     )
     return result.data if result.data else []
+
+
+def load_listed_stocks() -> dict:
+    """
+    listed_stocks 테이블에서 전체 상장 종목 로드
+    반환: {종목명: 종목코드} 딕셔너리
+    """
+    result = (
+        supabase.table("listed_stocks")
+        .select("stock_code, stock_name")
+        .execute()
+    )
+    if not result.data:
+        return {}
+    return {row["stock_name"]: row["stock_code"] for row in result.data}
 
 
 def load_analyzed_hours() -> set:
@@ -212,60 +228,118 @@ def step2_deep_analysis(hour: str, key_articles: list) -> dict:
 
 
 # ─────────────────────────────────────────────
-# Step 3 : 상장 종목 검증 (Haiku)
+# Step 3 : DB 기반 상장 종목 검증 + AI 보조
 # ─────────────────────────────────────────────
 
-def step3_verify_listed_stocks(stocks: list) -> list:
+def step3_verify_stocks(stocks: list, listed: dict) -> list:
     """
-    AI가 추출한 종목명을 KOSPI/KOSDAQ 상장 종목으로 폭넓게 매핑합니다.
+    DB 상장 종목 리스트 기반으로 3단계 매칭 후 미매칭은 Haiku로 처리합니다.
 
-    - 직접 상장 종목 → 그대로 유지
-    - 비상장이지만 관련 상장사 있음 → 상장사로 대체 (이유에 관계 명시)
-      예) 두나무 → 카카오 (두나무 최대주주)
-    - 관련 상장사 없는 비상장/외국기업 → 제외
+    1단계 (정확한 매칭)  : 종목명이 DB에 정확히 존재
+    2단계 (유사 매칭)    : difflib으로 85% 이상 유사한 이름 매칭
+    3단계 (부분 매칭)    : 종목명이 DB 이름에 포함되거나 DB 이름이 종목명에 포함
+    AI 보조              : 위 3단계 모두 실패 시 Haiku로 관련 상장사 탐색
+                          예) 두나무 → 카카오(최대주주)
     """
     if not stocks:
         return []
 
+    verified    = []
+    unmatched   = []
+    seen        = set()
+    stock_names = list(listed.keys())  # DB 종목명 전체 리스트
+
+    for stock in stocks:
+        name   = stock.get("name",   "").strip()
+        reason = stock.get("reason", "").strip()
+
+        if not name or name in seen:
+            continue
+
+        # ── 1단계: 정확한 이름 매칭 ──────────────────
+        if name in listed:
+            verified.append({"name": name, "reason": reason})
+            seen.add(name)
+            continue
+
+        # ── 2단계: difflib 유사 매칭 (85% 이상) ──────
+        close = difflib.get_close_matches(name, stock_names, n=1, cutoff=0.85)
+        if close:
+            matched = close[0]
+            if matched not in seen:
+                verified.append({"name": matched, "reason": reason})
+                seen.add(matched)
+            continue
+
+        # ── 3단계: 부분 문자열 매칭 ──────────────────
+        # 공백·괄호 제거 후 비교
+        name_clean = name.replace(" ", "").replace("(주)", "").replace("㈜", "")
+        partial = [
+            n for n in stock_names
+            if name_clean in n.replace(" ", "") or n.replace(" ", "") in name_clean
+        ]
+        if partial:
+            best = min(partial, key=len)   # 가장 정확한(짧은) 이름 선택
+            if best not in seen:
+                verified.append({"name": best, "reason": reason})
+                seen.add(best)
+            continue
+
+        # ── AI 보조 대상으로 분류 ─────────────────────
+        unmatched.append(stock)
+
+    # ── AI 보조: 비상장/외국기업 → 관련 상장사 매핑 ──
+    if unmatched:
+        print(f"  → DB 미매칭 {len(unmatched)}건 → AI 보조 탐색")
+        ai_results = step3_ai_fallback(unmatched)
+        for item in ai_results:
+            name = item.get("name", "").strip()
+            if name and name in listed and name not in seen:
+                verified.append(item)
+                seen.add(name)
+
+    before = [s["name"] for s in stocks]
+    after  = [s["name"] for s in verified]
+    print(f"  → 종목 검증: {before} → {after}")
+    return verified
+
+
+def step3_ai_fallback(stocks: list) -> list:
+    """
+    DB 매칭 실패한 종목을 Haiku로 처리합니다.
+    비상장 기업의 경우 관련 상장사를 찾아 대체합니다.
+    """
     stocks_info = [
         {"name": s["name"], "reason": s.get("reason", "")}
         for s in stocks
     ]
 
-    prompt = f"""다음 종목/기업 목록을 검토하여 투자자가 참고할 수 있는 국내 상장 종목으로 매핑해주세요.
+    prompt = f"""다음 종목/기업이 KOSPI/KOSDAQ 상장 종목 DB에서 찾을 수 없었습니다.
+비상장 기업이라면 관련 상장사(지배주주·모회사·주요 관련사)로 대체해주세요.
 
 검증 대상:
 {json.dumps(stocks_info, ensure_ascii=False, indent=2)}
 
 처리 규칙:
-1. KOSPI/KOSDAQ 직접 상장 종목 → 정확한 상장 종목명으로 그대로 포함
-2. 비상장 기업이지만 KOSPI/KOSDAQ 상장된 지배주주·모회사·주요 관련사가 있으면 → 그 상장사로 대체
-   예) 두나무(비상장, Upbit 운영) → 카카오(두나무 최대주주) 또는 한화투자증권
-   예) 스페이스X → 관련 국내 상장사 없으면 제외
-3. 관련 국내 상장사가 없는 비상장/외국 기업 → 제외
-4. 종목명 오탈자 → 정확한 상장 종목명으로 수정
+1. 비상장이지만 관련 상장사 있음 → 상장사명으로 대체 (이유에 관계 명시)
+   예) 두나무 → 카카오 / 이유: "두나무(Upbit) 최대주주"
+2. 외국 기업 → 관련 국내 상장사가 명확하면 포함, 없으면 제외
+3. 관련 국내 상장사가 없으면 → 빈 배열에 포함하지 않음
 
-반드시 JSON 형식으로만 응답:
+반드시 JSON 배열로만 응답 (없으면 빈 배열 []):
 [
-  {{"name": "상장종목명", "reason": "이슈와의 관련 이유 (대체된 경우 관계 포함) 25자 이내"}},
+  {{"name": "상장종목명", "reason": "관계 포함 이유 25자 이내"}},
   ...
-]
-
-예시 응답:
-[
-  {{"name": "카카오", "reason": "두나무(Upbit) 최대주주"}},
-  {{"name": "SK하이닉스", "reason": "HBM 주요 공급사"}}
 ]"""
 
     try:
         msg  = claude.messages.create(
             model=MODEL_HAIKU,
-            max_tokens=400,
+            max_tokens=300,
             messages=[{"role": "user", "content": prompt}],
         )
         text = msg.content[0].text.strip()
 
-        # JSON 파싱
         if "```" in text:
             parts = text.split("```")
             text  = parts[1] if len(parts) > 1 else text
@@ -274,27 +348,21 @@ def step3_verify_listed_stocks(stocks: list) -> list:
         if "[" in text:
             text = text[text.index("["):text.rindex("]") + 1]
 
-        raw      = json.loads(text)
-        verified = []
-        seen     = set()
-
+        raw  = json.loads(text)
+        seen = set()
+        out  = []
         for item in raw:
             if not isinstance(item, dict):
                 continue
-            name   = item.get("name",   "").strip()
-            reason = item.get("reason", "").strip()
+            name = item.get("name", "").strip()
             if name and name not in seen:
                 seen.add(name)
-                verified.append({"name": name, "reason": reason})
-
-        before = [s["name"] for s in stocks]
-        after  = [s["name"] for s in verified]
-        print(f"  → 종목 검증: {before} → {after}")
-        return verified
+                out.append({"name": name, "reason": item.get("reason", "").strip()})
+        return out
 
     except Exception as e:
-        print(f"  ⚠️  Step3 오류: {e} → 원본 종목 그대로 사용")
-        return stocks
+        print(f"  ⚠️  Step3 AI 보조 오류: {e}")
+        return []
 
 
 # ─────────────────────────────────────────────
@@ -329,6 +397,14 @@ def main():
     print(f"AI 자동 분석 시작: {datetime.now(KST).strftime('%Y-%m-%d %H:%M KST')}")
     print(f"Step1,3: {MODEL_HAIKU}  |  Step2: {MODEL_SONNET}")
     print("=" * 55)
+
+    # 상장 종목 DB 로드 (Step 3에서 재사용)
+    print("📋 상장 종목 DB 로드 중...")
+    listed_stocks = load_listed_stocks()
+    if listed_stocks:
+        print(f"   → {len(listed_stocks)}개 종목 로드 완료 (KOSPI+KOSDAQ)")
+    else:
+        print("   ⚠️  상장 종목 DB 없음 → AI 단독 검증으로 대체")
 
     # 뉴스 로드
     articles = load_news()
@@ -373,10 +449,10 @@ def main():
         print(f"  [Step2] 본문 기반 심층 분석 중...")
         result = step2_deep_analysis(hour, key_articles)
 
-        # Step 3: 상장 종목 검증
+        # Step 3: DB 기반 상장 종목 검증
         if result["stocks"]:
-            print(f"  [Step3] 상장 종목 검증 중...")
-            result["stocks"] = step3_verify_listed_stocks(result["stocks"])
+            print(f"  [Step3] DB 기반 상장 종목 검증 중...")
+            result["stocks"] = step3_verify_stocks(result["stocks"], listed_stocks)
 
         # 저장
         save_analysis(hour, result, hour_articles)

@@ -1,0 +1,380 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI 마켓 타임라인</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans KR', sans-serif;
+    background: #0f1117;
+    color: #e8eaf0;
+    min-height: 100vh;
+  }
+
+  /* ── 헤더 ── */
+  .header {
+    position: sticky; top: 0; z-index: 100;
+    background: rgba(15,17,23,0.95);
+    backdrop-filter: blur(12px);
+    border-bottom: 1px solid #1e2130;
+    padding: 14px 28px;
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .header-left { display: flex; align-items: center; gap: 10px; }
+  .header-logo {
+    font-size: 18px; font-weight: 700;
+    background: linear-gradient(135deg, #4f9cf9, #a78bfa);
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+  }
+  .header-badge {
+    font-size: 11px; background: #1e2130;
+    border: 1px solid #2a2f45; color: #7c85a2;
+    padding: 2px 8px; border-radius: 20px;
+  }
+  .header-right { display: flex; align-items: center; gap: 8px; }
+  .header-time { font-size: 12px; color: #7c85a2; }
+  .header-btn {
+    background: #1e2130; border: 1px solid #2a2f45;
+    color: #a0a8bf; padding: 6px 10px; border-radius: 8px;
+    font-size: 14px; cursor: pointer;
+  }
+
+  /* ── 테마 바 ── */
+  .theme-bar {
+    padding: 10px 28px; background: #0d0f1a;
+    border-bottom: 1px solid #1e2130;
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  }
+  .theme-label { font-size: 11px; color: #7c85a2; margin-right: 4px; }
+  .theme-tag { font-size: 12px; font-weight: 600; padding: 3px 10px; border-radius: 20px; cursor: pointer; }
+  .tag-hot { background: rgba(239,68,68,0.15); color: #f87171; border: 1px solid rgba(239,68,68,0.3); }
+  .tag-up  { background: rgba(34,197,94,0.12);  color: #4ade80; border: 1px solid rgba(34,197,94,0.25); }
+  .tag-neu { background: rgba(100,116,139,0.15); color: #94a3b8; border: 1px solid rgba(100,116,139,0.25); }
+
+  /* ── 메인 ── */
+  .main { max-width: 820px; margin: 0 auto; padding: 28px 20px 60px; }
+
+  .date-divider {
+    display: flex; align-items: center; gap: 12px; margin-bottom: 24px;
+  }
+  .date-divider span { font-size: 13px; font-weight: 600; color: #7c85a2; white-space: nowrap; }
+  .date-divider::before, .date-divider::after { content: ''; flex: 1; height: 1px; background: #1e2130; }
+
+  /* ── 타임라인 ── */
+  .timeline { display: flex; flex-direction: column; }
+
+  .tl-item { display: flex; }
+
+  .tl-time-col {
+    width: 70px; flex-shrink: 0;
+    display: flex; flex-direction: column; align-items: center;
+    padding-top: 18px;
+  }
+  .tl-time-label { font-size: 12px; font-weight: 700; color: #7c85a2; margin-bottom: 6px; }
+  .tl-dot {
+    width: 12px; height: 12px; border-radius: 50%; border: 2px solid;
+    flex-shrink: 0; z-index: 2; background: #0f1117;
+  }
+  .dot-active { border-color: #4f9cf9; box-shadow: 0 0 0 4px rgba(79,156,249,0.12); }
+  .dot-normal { border-color: #2a2f45; }
+  .tl-line { width: 1px; flex: 1; background: #1e2130; margin-top: 4px; min-height: 20px; }
+
+  .tl-card-col { flex: 1; padding: 0 0 24px 16px; }
+
+  /* ── 카드 ── */
+  .tl-card {
+    background: #13151f; border: 1px solid #1e2130;
+    border-radius: 14px; overflow: hidden; transition: border-color 0.2s;
+  }
+  .tl-card:hover { border-color: #2a3050; }
+  .tl-card.active-card { border-color: #2a3a5c; }
+
+  .card-header {
+    padding: 14px 18px 10px;
+    display: flex; align-items: flex-start; justify-content: space-between; gap: 12px;
+  }
+  .card-header-left { flex: 1; }
+  .card-sector {
+    display: inline-flex; align-items: center; gap: 5px;
+    font-size: 11px; font-weight: 600; padding: 3px 9px;
+    border-radius: 6px; margin-bottom: 7px;
+  }
+  .sector-robot  { background: rgba(139,92,246,0.15); color: #a78bfa; border: 1px solid rgba(139,92,246,0.25); }
+  .sector-battery{ background: rgba(234,179,8,0.12);  color: #fbbf24; border: 1px solid rgba(234,179,8,0.25); }
+  .sector-semi   { background: rgba(59,130,246,0.12); color: #60a5fa; border: 1px solid rgba(59,130,246,0.25); }
+  .sector-pharma { background: rgba(16,185,129,0.12); color: #34d399; border: 1px solid rgba(16,185,129,0.25); }
+
+  .card-title { font-size: 15px; font-weight: 600; color: #dde1ef; line-height: 1.4; }
+  .card-source { font-size: 11px; color: #4a5168; margin-top: 4px; }
+  .card-news-count {
+    font-size: 11px; color: #4a5168;
+    background: #1a1d2b; padding: 3px 8px; border-radius: 6px;
+    flex-shrink: 0; white-space: nowrap;
+  }
+
+  /* AI 요약 */
+  .card-ai {
+    margin: 0 14px 14px;
+    background: #0d0f1a; border: 1px solid #1a1f33;
+    border-radius: 10px; padding: 12px 14px;
+  }
+  .ai-label {
+    display: flex; align-items: center; gap: 5px;
+    font-size: 11px; font-weight: 600; color: #4f9cf9; margin-bottom: 7px;
+  }
+  .ai-text { font-size: 13px; color: #9aa3bf; line-height: 1.7; }
+
+  /* 푸터 */
+  .card-footer {
+    padding: 10px 14px 14px;
+    display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px;
+  }
+  .stock-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .stock-chip {
+    display: inline-flex; align-items: center; gap: 4px;
+    font-size: 12px; font-weight: 600; padding: 4px 10px;
+    border-radius: 8px; background: #1a1d2b; border: 1px solid #252a3d;
+    color: #c8cfe8; cursor: pointer; text-decoration: none; transition: all 0.15s;
+  }
+  .stock-chip:hover { background: #1f2540; border-color: #4f9cf9; color: #4f9cf9; }
+  .stock-chip .arrow { font-size: 10px; opacity: 0.5; }
+  .article-link {
+    font-size: 12px; color: #4a5168; text-decoration: none;
+    display: flex; align-items: center; gap: 4px;
+    padding: 4px 8px; border-radius: 6px; transition: all 0.15s;
+  }
+  .article-link:hover { color: #7c85a2; background: #1a1d2b; }
+
+  /* 빈 시간대 */
+  .tl-empty { flex: 1; padding: 0 0 22px 16px; }
+  .empty-slot { height: 38px; display: flex; align-items: center; }
+  .empty-line { font-size: 12px; color: #252a3d; }
+
+  /* 더보기 */
+  .load-more { text-align: center; margin-top: 8px; }
+  .load-more-btn {
+    background: #13151f; border: 1px solid #1e2130;
+    color: #7c85a2; font-size: 13px; padding: 10px 24px;
+    border-radius: 10px; cursor: pointer; transition: all 0.15s;
+  }
+  .load-more-btn:hover { border-color: #2a3050; color: #a0a8bf; }
+
+  /* 완전 빈 상태 */
+  .empty-state { text-align: center; padding: 80px 20px; }
+  .empty-icon { font-size: 48px; margin-bottom: 16px; opacity: 0.4; }
+  .empty-title { font-size: 16px; font-weight: 600; color: #4a5168; margin-bottom: 8px; }
+  .empty-desc  { font-size: 13px; color: #2a2f45; line-height: 1.7; }
+</style>
+</head>
+<body>
+
+<!-- 헤더 -->
+<div class="header">
+  <div class="header-left">
+    <span class="header-logo">📈 AI 마켓 타임라인</span>
+    <span class="header-badge">최근 24시간</span>
+  </div>
+  <div class="header-right">
+    <span class="header-time">🕒 2026.03.25  13:00 업데이트</span>
+    <button class="header-btn">🔍</button>
+    <button class="header-btn">⚙️</button>
+  </div>
+</div>
+
+<!-- 테마 바 -->
+<div class="theme-bar">
+  <span class="theme-label">🔥 오늘 주도 테마</span>
+  <span class="theme-tag tag-hot">#반도체</span>
+  <span class="theme-tag tag-hot">#AI·로봇</span>
+  <span class="theme-tag tag-up">#2차전지</span>
+  <span class="theme-tag tag-up">#바이오</span>
+  <span class="theme-tag tag-neu">#금리·환율</span>
+</div>
+
+<!-- 메인 -->
+<div class="main">
+  <div class="date-divider"><span>2026년 03월 25일 수요일</span></div>
+
+  <div class="timeline">
+
+    <!-- 13:00 활성 -->
+    <div class="tl-item">
+      <div class="tl-time-col">
+        <span class="tl-time-label">13:00</span>
+        <div class="tl-dot dot-active"></div>
+        <div class="tl-line"></div>
+      </div>
+      <div class="tl-card-col">
+        <div class="tl-card active-card">
+          <div class="card-header">
+            <div class="card-header-left">
+              <div class="card-sector sector-robot">🤖 AI·로봇</div>
+              <div class="card-title">정부, 첨단 로봇 산업 집중 육성 정책 발표…관련주 강세</div>
+              <div class="card-source">한국경제 · 매일경제 외 3건</div>
+            </div>
+            <span class="card-news-count">📰 5건</span>
+          </div>
+          <div class="card-ai">
+            <div class="ai-label">✦ AI 요약</div>
+            <div class="ai-text">
+              오후 1시, 정부의 대규모 로봇 산업 투자 계획 발표 소식에 관련 부품주와 지능형 로봇 테마에 강한 매수세가 유입되고 있습니다. 레인보우로보틱스·두산로보틱스 등 핵심 완성품 업체가 상승을 주도하며, 감속기·엔코더 등 부품 공급사들도 동반 강세를 보이고 있습니다.
+            </div>
+          </div>
+          <div class="card-footer">
+            <div class="stock-chips">
+              <a href="https://finance.naver.com/item/main.naver?code=277810" target="_blank" class="stock-chip">레인보우로보틱스 <span class="arrow">↗</span></a>
+              <a href="https://finance.naver.com/item/main.naver?code=454910" target="_blank" class="stock-chip">두산로보틱스 <span class="arrow">↗</span></a>
+              <a href="https://finance.naver.com/item/main.naver?code=348210" target="_blank" class="stock-chip">HD현대로보틱스 <span class="arrow">↗</span></a>
+            </div>
+            <a href="#" class="article-link">관련 기사 보기 →</a>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 12:00 -->
+    <div class="tl-item">
+      <div class="tl-time-col">
+        <span class="tl-time-label">12:00</span>
+        <div class="tl-dot dot-normal"></div>
+        <div class="tl-line"></div>
+      </div>
+      <div class="tl-card-col">
+        <div class="tl-card">
+          <div class="card-header">
+            <div class="card-header-left">
+              <div class="card-sector sector-battery">🔋 2차전지</div>
+              <div class="card-title">글로벌 전기차 1분기 판매량 예상치 하회…보조금 축소 여파</div>
+              <div class="card-source">머니투데이 · 이데일리 외 2건</div>
+            </div>
+            <span class="card-news-count">📰 4건</span>
+          </div>
+          <div class="card-ai">
+            <div class="ai-label">✦ AI 요약</div>
+            <div class="ai-text">
+              유럽 주요 국가의 전기차 보조금 축소 여파로 1분기 글로벌 판매량이 시장 컨센서스를 10% 이상 하회했다는 분석이 나오며 배터리 셀·소재 업체 전반에 약세 압력이 가해지고 있습니다. 북미 시장은 IRA 혜택 지속으로 상대적으로 견조한 흐름을 유지 중입니다.
+            </div>
+          </div>
+          <div class="card-footer">
+            <div class="stock-chips">
+              <a href="https://finance.naver.com/item/main.naver?code=373220" target="_blank" class="stock-chip">LG에너지솔루션 <span class="arrow">↗</span></a>
+              <a href="https://finance.naver.com/item/main.naver?code=006400" target="_blank" class="stock-chip">삼성SDI <span class="arrow">↗</span></a>
+              <a href="https://finance.naver.com/item/main.naver?code=247540" target="_blank" class="stock-chip">에코프로비엠 <span class="arrow">↗</span></a>
+            </div>
+            <a href="#" class="article-link">관련 기사 보기 →</a>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 11:00 -->
+    <div class="tl-item">
+      <div class="tl-time-col">
+        <span class="tl-time-label">11:00</span>
+        <div class="tl-dot dot-normal"></div>
+        <div class="tl-line"></div>
+      </div>
+      <div class="tl-card-col">
+        <div class="tl-card">
+          <div class="card-header">
+            <div class="card-header-left">
+              <div class="card-sector sector-semi">💾 반도체</div>
+              <div class="card-title">엔비디아 어닝 서프라이즈, 국내 HBM 밸류체인 전반 강세</div>
+              <div class="card-source">한국경제 · 조선비즈 외 5건</div>
+            </div>
+            <span class="card-news-count">📰 7건</span>
+          </div>
+          <div class="card-ai">
+            <div class="ai-label">✦ AI 요약</div>
+            <div class="ai-text">
+              간밤 뉴욕증시에서 엔비디아가 예상치를 15% 웃도는 실적을 기록하며 국내 HBM 공급 밸류체인 전반에 훈풍이 불고 있습니다. SK하이닉스·한미반도체 등 직접 수혜주가 2~4% 강세를 보이며 코스피 반도체 지수 상승을 이끌고 있습니다.
+            </div>
+          </div>
+          <div class="card-footer">
+            <div class="stock-chips">
+              <a href="https://finance.naver.com/item/main.naver?code=000660" target="_blank" class="stock-chip">SK하이닉스 <span class="arrow">↗</span></a>
+              <a href="https://finance.naver.com/item/main.naver?code=042700" target="_blank" class="stock-chip">한미반도체 <span class="arrow">↗</span></a>
+              <a href="https://finance.naver.com/item/main.naver?code=005930" target="_blank" class="stock-chip">삼성전자 <span class="arrow">↗</span></a>
+            </div>
+            <a href="#" class="article-link">관련 기사 보기 →</a>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 10:00 빈 시간대 -->
+    <div class="tl-item">
+      <div class="tl-time-col">
+        <span class="tl-time-label">10:00</span>
+        <div class="tl-dot dot-normal"></div>
+        <div class="tl-line"></div>
+      </div>
+      <div class="tl-empty">
+        <div class="empty-slot">
+          <span class="empty-line">— 주요 이슈 없음</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- 09:00 -->
+    <div class="tl-item">
+      <div class="tl-time-col">
+        <span class="tl-time-label">09:00</span>
+        <div class="tl-dot dot-normal"></div>
+        <div class="tl-line"></div>
+      </div>
+      <div class="tl-card-col">
+        <div class="tl-card">
+          <div class="card-header">
+            <div class="card-header-left">
+              <div class="card-sector sector-pharma">💊 바이오</div>
+              <div class="card-title">국내 바이오 기업, FDA 패스트트랙 지정 획득…기대감 고조</div>
+              <div class="card-source">바이오스펙테이터 · 청년의사 외 1건</div>
+            </div>
+            <span class="card-news-count">📰 3건</span>
+          </div>
+          <div class="card-ai">
+            <div class="ai-label">✦ AI 요약</div>
+            <div class="ai-text">
+              국내 중견 바이오 기업이 FDA 패스트트랙 지정을 획득했다는 소식에 해당 종목이 장 초반 상한가에 근접하는 급등세를 연출하고 있습니다. 동종 파이프라인 보유 기업들도 동반 강세를 보이며 바이오 섹터 전반의 투자 심리가 개선되고 있습니다.
+            </div>
+          </div>
+          <div class="card-footer">
+            <div class="stock-chips">
+              <a href="https://finance.naver.com/item/main.naver?code=207940" target="_blank" class="stock-chip">삼성바이오로직스 <span class="arrow">↗</span></a>
+              <a href="https://finance.naver.com/item/main.naver?code=068270" target="_blank" class="stock-chip">셀트리온 <span class="arrow">↗</span></a>
+            </div>
+            <a href="#" class="article-link">관련 기사 보기 →</a>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div><!-- /timeline -->
+
+  <div class="load-more">
+    <button class="load-more-btn">⏬ 과거 이슈 더 보기</button>
+  </div>
+
+</div>
+
+<!--
+  ── 빈 상태 예시 (데이터 없을 때) ──
+  아래 주석을 해제하면 빈 화면 확인 가능
+
+  <div class="main">
+    <div class="empty-state">
+      <div class="empty-icon">📭</div>
+      <div class="empty-title">아직 수집된 뉴스가 없습니다</div>
+      <div class="empty-desc">
+        GitHub Actions가 매시간 자동으로 뉴스를 수집합니다.<br>
+        잠시 후 다시 확인해주세요.
+      </div>
+    </div>
+  </div>
+-->
+
+</body>
+</html>
