@@ -1,0 +1,216 @@
+"""
+analyzers/stock_matcher.py
+===========================
+종목 매칭 분석기.
+기존 analyze.py의 step3_verify_stocks / step3_ai_fallback 로직을 분리합니다.
+
+3단계 매칭 전략:
+1. 정확한 이름 매칭 (DB lookup)
+2. difflib 유사 매칭 (85% 이상)
+3. 부분 문자열 매칭
+4. AI 보조 (Haiku) — 비상장 기업 → 관련 상장사 탐색
+"""
+
+from __future__ import annotations
+import json
+import difflib
+
+from core.config import AppConfig
+from core.interfaces import AnalysisResult, StockMatch
+from core.logging import get_logger
+
+
+class StockMatcher:
+    """
+    DB 상장 종목 리스트를 기반으로 분석 결과의 종목을 검증/보완합니다.
+
+    사용::
+
+        matcher = StockMatcher(config)
+        results = matcher.match(results, listed_stocks)
+    """
+
+    name = "stock_matcher"
+
+    def __init__(self, config: AppConfig):
+        self._cutoff = config.raw.get("analyzers", {}).get("stock_matcher", {}).get("similarity_cutoff", 0.85) \
+            if hasattr(config, "raw") else 0.85
+        self._anthropic_key = config.anthropic_api_key
+        self._log = get_logger("stock_matcher")
+
+        # Claude 클라이언트 (AI 보조용, 선택적)
+        self._claude = None
+        if self._anthropic_key:
+            try:
+                import anthropic
+                self._claude = anthropic.Anthropic(api_key=self._anthropic_key)
+            except ImportError:
+                pass
+
+        # Haiku 모델명
+        self._haiku_model = config.claude.stock_fallback.model
+
+    # ──────────────────────────────────────
+    # 공개 메서드
+    # ──────────────────────────────────────
+
+    def match(
+        self,
+        results: list[AnalysisResult],
+        listed_stocks: dict[str, str],
+    ) -> list[AnalysisResult]:
+        """
+        AnalysisResult 목록의 related_stocks를 검증하고 보완합니다.
+
+        Args:
+            results:       분석 결과 목록
+            listed_stocks: {종목명: 종목코드} 딕셔너리
+
+        Returns:
+            related_stocks가 검증된 AnalysisResult 목록
+        """
+        if not listed_stocks:
+            self._log.warning("상장 종목 DB 없음 — 종목 검증 스킵")
+            return results
+
+        stock_names = list(listed_stocks.keys())
+
+        for result in results:
+            if not result.related_stocks:
+                continue
+
+            before = [s.name for s in result.related_stocks]
+            verified = self._verify_stocks(result.related_stocks, listed_stocks, stock_names)
+
+            # 종목 코드 채우기
+            for stock in verified:
+                if not stock.code and stock.name in listed_stocks:
+                    stock.code = listed_stocks[stock.name]
+
+            result.related_stocks = verified
+            after = [s.name for s in verified]
+            self._log.info(f"  {result.hour} 종목 검증: {before} → {after}")
+
+        return results
+
+    def analyze(self, articles, **kwargs) -> list:
+        """Analyzer 프로토콜 호환용 — 직접 사용 시 match()를 사용하세요."""
+        return []
+
+    # ──────────────────────────────────────
+    # 내부 매칭 로직
+    # ──────────────────────────────────────
+
+    def _verify_stocks(
+        self,
+        stocks: list[StockMatch],
+        listed: dict[str, str],
+        stock_names: list[str],
+    ) -> list[StockMatch]:
+        """3단계 DB 매칭 + AI 보조 방식으로 종목을 검증합니다."""
+        verified:  list[StockMatch] = []
+        unmatched: list[StockMatch] = []
+        seen:      set[str]         = set()
+
+        for stock in stocks:
+            name = stock.name.strip()
+            if not name or name in seen:
+                continue
+
+            matched = self._match_one(name, listed, stock_names)
+            if matched:
+                if matched not in seen:
+                    verified.append(StockMatch(name=matched, reason=stock.reason))
+                    seen.add(matched)
+            else:
+                unmatched.append(stock)
+
+        # AI 보조 (비상장 기업 → 관련 상장사 탐색)
+        if unmatched and self._claude:
+            self._log.info(f"  DB 미매칭 {len(unmatched)}건 → AI 보조 탐색")
+            ai_results = self._ai_fallback(unmatched)
+            for item in ai_results:
+                if item.name and item.name in listed and item.name not in seen:
+                    verified.append(item)
+                    seen.add(item.name)
+
+        return verified
+
+    def _match_one(
+        self,
+        name: str,
+        listed: dict[str, str],
+        stock_names: list[str],
+    ) -> str | None:
+        """1~3단계 매칭을 수행합니다. 매칭된 종목명 또는 None을 반환합니다."""
+        # 1단계: 정확한 이름
+        if name in listed:
+            return name
+
+        # 2단계: difflib 유사 매칭
+        close = difflib.get_close_matches(name, stock_names, n=1, cutoff=self._cutoff)
+        if close:
+            return close[0]
+
+        # 3단계: 부분 문자열 매칭
+        clean = name.replace(" ", "").replace("(주)", "").replace("㈜", "")
+        partial = [
+            n for n in stock_names
+            if clean in n.replace(" ", "") or n.replace(" ", "") in clean
+        ]
+        if partial:
+            return min(partial, key=len)
+
+        return None
+
+    def _ai_fallback(self, stocks: list[StockMatch]) -> list[StockMatch]:
+        """DB 매칭 실패한 종목을 Haiku로 처리합니다."""
+        if not self._claude:
+            return []
+
+        stocks_info = [{"name": s.name, "reason": s.reason} for s in stocks]
+        prompt = f"""다음 종목/기업이 KOSPI/KOSDAQ 상장 종목 DB에서 찾을 수 없었습니다.
+비상장 기업이라면 관련 상장사(지배주주·모회사·주요 관련사)로 대체해주세요.
+
+검증 대상:
+{json.dumps(stocks_info, ensure_ascii=False, indent=2)}
+
+처리 규칙:
+1. 비상장이지만 관련 상장사 있음 → 상장사명으로 대체 (이유에 관계 명시)
+2. 외국 기업 → 관련 국내 상장사가 명확하면 포함, 없으면 제외
+3. 관련 국내 상장사가 없으면 → 빈 배열에 포함하지 않음
+
+반드시 JSON 배열로만 응답 (없으면 빈 배열 []):
+[
+  {{"name": "상장종목명", "reason": "관계 포함 이유 25자 이내"}},
+  ...
+]"""
+
+        try:
+            msg  = self._claude.messages.create(
+                model=self._haiku_model,
+                max_tokens=300,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            text = msg.content[0].text.strip()
+            if "```" in text:
+                parts = text.split("```")
+                text  = parts[1] if len(parts) > 1 else text
+                if text.lower().startswith("json"):
+                    text = text[4:]
+            if "[" in text:
+                text = text[text.index("["):text.rindex("]") + 1]
+
+            seen: set[str] = set()
+            out:  list[StockMatch] = []
+            for item in json.loads(text):
+                if not isinstance(item, dict):
+                    continue
+                name = item.get("name", "").strip()
+                if name and name not in seen:
+                    seen.add(name)
+                    out.append(StockMatch(name=name, reason=item.get("reason", "").strip()))
+            return out
+        except Exception as e:
+            self._log.warning(f"AI 보조 오류: {e}")
+            return []

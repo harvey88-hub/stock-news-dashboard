@@ -4,3 +4,7 @@ __pycache__/
 *.pyc
 .env
 .claude/
+harness/local_dev.db
+harness/.pytest_cache/
+harness/pytest-cache-files-*/
+harness/**/__pycache__/

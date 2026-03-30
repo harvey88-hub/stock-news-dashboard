@@ -2,8 +2,10 @@ name: 트랜드AI Harness 파이프라인
 
 on:
   schedule:
-    - cron: "0 * * * *"      # 매시간 뉴스 수집 + AI 분석
-    - cron: "0 21 * * *"     # 매일 06:00 KST (UTC 21:00) 상장 종목 업데이트
+    # 매시간 뉴스 수집 + 분석 (KST 기준 매시간 0분)
+    - cron: "0 * * * *"
+    # 일간 KRX 종목 업데이트 (KST 06:00 = UTC 21:00 전날)
+    - cron: "0 21 * * *"
   workflow_dispatch:
     inputs:
       pipeline:
@@ -19,11 +21,6 @@ on:
         required: false
         default: false
         type: boolean
-  repository_dispatch:
-    types: [cron-trigger]
-
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   # ────────────────────────────────────────
@@ -32,10 +29,13 @@ jobs:
   hourly-news:
     name: "뉴스 수집 + AI 분석"
     runs-on: ubuntu-latest
+    # cron "0 * * * *" 또는 수동으로 hourly-news 선택 시 실행
     if: |
-      github.event.schedule == '0 * * * *' ||
-      github.event_name == 'repository_dispatch' ||
-      (github.event_name == 'workflow_dispatch' && github.event.inputs.pipeline == 'hourly-news')
+      github.event_name == 'schedule' && github.event.schedule == '0 * * * *' ||
+      github.event_name == 'workflow_dispatch' && github.event.inputs.pipeline == 'hourly-news'
+    defaults:
+      run:
+        working-directory: harness
 
     steps:
       - uses: actions/checkout@v4
@@ -48,9 +48,9 @@ jobs:
           cache-dependency-path: "harness/pyproject.toml"
 
       - name: 의존성 설치
-        run: pip install requests supabase anthropic pyyaml
+        run: pip install -e ".[dev]"
 
-      - name: 뉴스 수집 + 분석 파이프라인
+      - name: 뉴스 수집 + 분석 파이프라인 실행
         env:
           SUPABASE_URL:      ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY:      ${{ secrets.SUPABASE_KEY }}
@@ -60,7 +60,7 @@ jobs:
           if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
             DRY_RUN="--dry-run"
           fi
-          python harness/cli.py pipeline hourly-news $DRY_RUN
+          python cli.py pipeline hourly-news $DRY_RUN
 
   # ────────────────────────────────────────
   # 일간: KRX 종목 업데이트
@@ -68,9 +68,13 @@ jobs:
   daily-stocks:
     name: "KRX 종목 업데이트"
     runs-on: ubuntu-latest
+    # cron "0 21 * * *" 또는 수동으로 daily-stocks 선택 시 실행
     if: |
-      github.event.schedule == '0 21 * * *' ||
-      (github.event_name == 'workflow_dispatch' && github.event.inputs.pipeline == 'daily-stocks')
+      github.event_name == 'schedule' && github.event.schedule == '0 21 * * *' ||
+      github.event_name == 'workflow_dispatch' && github.event.inputs.pipeline == 'daily-stocks'
+    defaults:
+      run:
+        working-directory: harness
 
     steps:
       - uses: actions/checkout@v4
@@ -83,9 +87,9 @@ jobs:
           cache-dependency-path: "harness/pyproject.toml"
 
       - name: 의존성 설치
-        run: pip install requests supabase pyyaml
+        run: pip install -e ".[dev]"
 
-      - name: KRX 종목 업데이트 파이프라인
+      - name: KRX 종목 업데이트 파이프라인 실행
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
@@ -95,4 +99,4 @@ jobs:
           if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
             DRY_RUN="--dry-run"
           fi
-          python harness/cli.py pipeline daily-stocks $DRY_RUN
+          python cli.py pipeline daily-stocks $DRY_RUN

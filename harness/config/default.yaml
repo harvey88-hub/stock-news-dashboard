@@ -1,0 +1,93 @@
+app:
+  name: "트랜드AI"
+  timezone: "Asia/Seoul"
+  hours_back: 24
+
+collectors:
+  rss:
+    hours_back: 1
+    max_articles: 1000
+    timeout_seconds: 10
+    user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+    feeds:
+      - name: "매일경제"
+        url: "https://www.mk.co.kr/rss/50200011/"
+        category: "stock"
+      - name: "조선비즈"
+        url: "https://biz.chosun.com/arc/outboundfeeds/rss/category/stock/?outputType=xml"
+        category: "stock"
+      - name: "파이낸셜뉴스"
+        url: "https://www.fnnews.com/rss/r20/fn_realnews_stock.xml"
+        category: "stock"
+      - name: "헤럴드경제"
+        url: "https://biz.heraldcorp.com/rss/google/finance"
+        category: "finance"
+      - name: "한국경제"
+        url: "https://www.hankyung.com/feed/finance"
+        category: "finance"
+      - name: "이데일리"
+        url: "http://rss.edaily.co.kr/stock_news.xml"
+        category: "stock"
+      - name: "이투데이"
+        url: "https://rss.etoday.co.kr/eto/finance_news.xml"
+        category: "finance"
+      - name: "연합뉴스"
+        url: "https://www.yonhapnewstv.co.kr/category/news/economy/feed/"
+        category: "economy"
+      - name: "서울경제"
+        url: "https://www.sedaily.com/rss/finance"
+        category: "finance"
+  krx:
+    base_url: "https://apis.data.go.kr/1160100/service/GetKrxListedInfoService/getItemInfo"
+    batch_size: 3000
+    markets:
+      - "KOSPI"
+      - "KOSDAQ"
+
+analyzers:
+  claude:
+    screening:
+      model: "claude-haiku-4-5"
+      max_tokens: 300
+      role: "1차 스크리닝 (빠르고 저렴)"
+    deep_analysis:
+      model: "claude-sonnet-4-5"
+      max_tokens: 900
+      role: "심층 분석 (정확)"
+    stock_fallback:
+      model: "claude-haiku-4-5"
+      max_tokens: 300
+      role: "종목 AI 보조 탐색"
+  stock_matcher:
+    similarity_cutoff: 0.85
+
+stores:
+  default: "supabase"
+  supabase:
+    tables:
+      articles: "news_articles"
+      analyses: "timeline_issues"
+      stocks: "listed_stocks"
+    batch_size: 500
+  sqlite:
+    path: "local_dev.db"
+
+pipelines:
+  hourly_news:
+    description: "매시간 뉴스 수집 + AI 분석"
+    steps:
+      - type: collect
+        collector: rss
+      - type: analyze
+        analyzer: claude
+        mode: screening
+      - type: analyze
+        analyzer: claude
+        mode: deep_analysis
+      - type: match
+        matcher: stock_matcher
+  daily_stocks:
+    description: "일간 KRX 종목 업데이트"
+    steps:
+      - type: collect
+        collector: krx
