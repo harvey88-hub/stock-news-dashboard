@@ -51,7 +51,7 @@ analyzers:
       max_tokens: 300
       role: "1차 스크리닝 (빠르고 저렴)"
     deep_analysis:
-      model: "claude-sonnet-4-5"
+      model: "claude-sonnet-4-6"
       max_tokens: 900
       role: "심층 분석 (정확)"
     stock_fallback:
