@@ -258,6 +258,49 @@ header                         { display: none !important; }
 .empty-title { font-size: 16px; font-weight: 600; color: #4a5168; margin-bottom: 8px; }
 .empty-desc  { font-size: 13px; color: #2a2f45; line-height: 1.7; }
 
+/* ── 추적 뷰어 ── */
+.trace-card {
+    background: #13151f; border: 1px solid #1e2130; border-radius: 14px;
+    padding: 14px 16px; margin-bottom: 12px;
+}
+.trace-hour {
+    font-size: 13px; font-weight: 700; color: #a0aec0;
+    margin-bottom: 10px; display: flex; align-items: center; justify-content: space-between;
+    flex-wrap: wrap; gap: 4px;
+}
+.trace-step {
+    display: flex; align-items: flex-start; gap: 10px;
+    padding: 8px 0; border-bottom: 1px solid #1a1f33; font-size: 12px;
+}
+.trace-step:last-child { border-bottom: none; }
+.step-label {
+    min-width: 64px; font-weight: 700; font-size: 11px;
+    padding: 2px 7px; border-radius: 5px; text-align: center;
+    margin-top: 1px; flex-shrink: 0;
+}
+.step-s1  { background: rgba(79,156,249,0.15); color: #60a5fa; }
+.step-s1b { background: rgba(167,139,250,0.15); color: #a78bfa; }
+.step-s1c { background: rgba(52,211,153,0.15);  color: #34d399; }
+.step-s2  { background: rgba(251,191,36,0.15);  color: #fbbf24; }
+.step-content { flex: 1; color: #9aa3bf; line-height: 1.6; }
+.step-issue { color: #dde1ef; font-weight: 600; }
+.badge-ok   { display:inline-block; font-size:10px; font-weight:700; padding:1px 6px;
+               border-radius:4px; background:rgba(52,211,153,0.15); color:#34d399;
+               border:1px solid rgba(52,211,153,0.3); }
+.badge-warn { display:inline-block; font-size:10px; font-weight:700; padding:1px 6px;
+               border-radius:4px; background:rgba(251,191,36,0.15); color:#fbbf24;
+               border:1px solid rgba(251,191,36,0.3); }
+.badge-edit { display:inline-block; font-size:10px; font-weight:700; padding:1px 6px;
+               border-radius:4px; background:rgba(167,139,250,0.15); color:#a78bfa;
+               border:1px solid rgba(167,139,250,0.3); }
+.trace-articles {
+    background: #0d0f1a; border: 1px solid #1a1f33; border-radius: 8px;
+    padding: 8px 10px; margin-top: 6px; font-size: 11px; color: #4a5168;
+    max-height: 110px; overflow-y: auto;
+}
+.trace-art-row { padding: 2px 0; }
+.trace-art-src { color: #4f9cf9; font-weight: 600; margin-right: 4px; }
+
 /* ══════════════════════════════════════
    모바일 최적화 (≤ 640px)
 ══════════════════════════════════════ */
@@ -347,6 +390,23 @@ def load_issues() -> dict:
         .execute()
     )
     return {row["hour"]: row for row in result.data} if result.data else {}
+
+
+@st.cache_data(ttl=300)
+def load_traces(hours_back: int = 24) -> list:
+    client = get_supabase()
+    cutoff = (datetime.now(KST) - timedelta(hours=hours_back)).strftime("%Y-%m-%d %H:%M")
+    try:
+        result = (
+            client.table("analysis_traces")
+            .select("*")
+            .gte("hour", cutoff)
+            .order("created_at", desc=True)
+            .execute()
+        )
+        return result.data or []
+    except Exception:
+        return []
 
 
 # ─────────────────────────────────────────────
@@ -493,213 +553,378 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-
 # ─────────────────────────────────────────────
-# 빈 상태
-# ─────────────────────────────────────────────
-
-if df.empty:
-    st.markdown("""
-    <div class="empty-state">
-      <div class="empty-icon">📭</div>
-      <div class="empty-title">아직 수집된 뉴스가 없습니다</div>
-      <div class="empty-desc">
-        GitHub Actions가 매시간 자동으로 뉴스를 수집합니다.<br>
-        Actions → Stock News Collector → Run workflow 를 클릭해 수동으로 실행해보세요.
-      </div>
-    </div>
-    """, unsafe_allow_html=True)
-    st.stop()
-
-
-# ─────────────────────────────────────────────
-# 하루 브리핑
+# 탭
 # ─────────────────────────────────────────────
 
-if issues:
-    today     = now_kst.strftime("%Y-%m-%d")
-    today_iss = sorted(
-        [(h, v) for h, v in issues.items() if h.startswith(today)],
-        key=lambda x: x[0], reverse=True
-    )
-    if today_iss:
-        count      = len(today_iss)
-        sectors    = list(dict.fromkeys(
-            [v.get("sector","") for _,v in today_iss if v.get("sector")]
-        ))[:4]
-        sector_str = " · ".join(sectors)
+tab_timeline, tab_trace = st.tabs(["📈 타임라인", "🔍 AI 판단 추적"])
 
-        items_html = ""
-        for hour, issue in today_iss[:6]:
-            h        = hour[11:16]
-            sector   = issue.get("sector",   "")
-            headline = issue.get("headline", "")
-            items_html += (
-                f'<div class="brief-item">'
-                f'<span class="brief-time">{h}</span>'
-                f'<span class="brief-sector">[{sector}]</span>'
-                f'<span class="brief-head">{headline}</span>'
-                f'</div>'
+# ══════════════════════════════════════════════
+# 탭 1: 타임라인
+# ══════════════════════════════════════════════
+
+with tab_timeline:
+    if df.empty:
+        st.markdown("""
+        <div class="empty-state">
+          <div class="empty-icon">📭</div>
+          <div class="empty-title">아직 수집된 뉴스가 없습니다</div>
+          <div class="empty-desc">
+            GitHub Actions가 매시간 자동으로 뉴스를 수집합니다.<br>
+            Actions → Stock News Collector → Run workflow 를 클릭해 수동으로 실행해보세요.
+          </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    # ── 하루 브리핑 ──
+    if issues:
+        today     = now_kst.strftime("%Y-%m-%d")
+        today_iss = sorted(
+            [(h, v) for h, v in issues.items() if h.startswith(today)],
+            key=lambda x: x[0], reverse=True
+        )
+        if today_iss:
+            count      = len(today_iss)
+            sectors    = list(dict.fromkeys(
+                [v.get("sector","") for _,v in today_iss if v.get("sector")]
+            ))[:4]
+            sector_str = " · ".join(sectors)
+
+            items_html = ""
+            for hour, issue in today_iss[:6]:
+                h        = hour[11:16]
+                sector   = issue.get("sector",   "")
+                headline = issue.get("headline", "")
+                items_html += (
+                    f'<div class="brief-item">'
+                    f'<span class="brief-time">{h}</span>'
+                    f'<span class="brief-sector">[{sector}]</span>'
+                    f'<span class="brief-head">{headline}</span>'
+                    f'</div>'
+                )
+
+            st.markdown(
+                f"""
+                <div class="daily-brief">
+                  <div class="brief-header">
+                    <span class="brief-title">📋 오늘의 AI 마켓 브리핑</span>
+                    <span class="brief-meta">{now_kst.strftime('%Y.%m.%d')} · {count}건 분석 · {sector_str}</span>
+                  </div>
+                  {items_html}
+                </div>
+                """,
+                unsafe_allow_html=True,
             )
 
-        st.markdown(
-            f"""
-            <div class="daily-brief">
-              <div class="brief-header">
-                <span class="brief-title">📋 오늘의 AI 마켓 브리핑</span>
-                <span class="brief-meta">{now_kst.strftime('%Y.%m.%d')} · {count}건 분석 · {sector_str}</span>
-              </div>
-              {items_html}
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
+    # ── 오늘 주도 테마 바 ──
+    if issues:
+        top = get_top_themes(issues)
+        if top:
+            colors    = ["tag-hot", "tag-hot", "tag-up", "tag-up", "tag-neu"]
+            tags_html = "".join(
+                f'<span class="theme-tag {colors[i]}">{s}</span>'
+                for i, s in enumerate(top)
+            )
+            st.markdown(
+                f'<div class="theme-bar"><span class="theme-label">🔥 오늘 주도 섹터</span>{tags_html}</div>',
+                unsafe_allow_html=True,
+            )
 
+    # ── 시간대별 타임라인 ──
+    df2 = df.copy()
+    df2["hour"] = df2["collected_at"].apply(to_kst_hour_key)
+    hours       = sorted(df2["hour"].dropna().unique(), reverse=True)
 
-# ─────────────────────────────────────────────
-# 오늘 주도 테마 바
-# ─────────────────────────────────────────────
+    prev_date   = None
+    total_hours = len(hours)
 
-if issues:
-    top = get_top_themes(issues)
-    if top:
-        colors    = ["tag-hot", "tag-hot", "tag-up", "tag-up", "tag-neu"]
-        tags_html = "".join(
-            f'<span class="theme-tag {colors[i]}">{s}</span>'
-            for i, s in enumerate(top)
-        )
-        st.markdown(
-            f'<div class="theme-bar"><span class="theme-label">🔥 오늘 주도 섹터</span>{tags_html}</div>',
-            unsafe_allow_html=True,
-        )
+    for idx, hour in enumerate(hours):
+        hour_df  = df2[df2["hour"] == hour]
+        articles = hour_df.to_dict("records")
+        is_last  = (idx == total_hours - 1)
+        is_latest = (idx == 0)
+        issue    = issues.get(hour)
 
+        date_str = hour[:10]
+        if date_str != prev_date:
+            y, m, d = date_str.split("-")
+            weekdays = ["월","화","수","목","금","토","일"]
+            wd = weekdays[datetime(int(y), int(m), int(d)).weekday()]
+            st.markdown(
+                f'<div class="date-sep">{y}년 {int(m)}월 {int(d)}일 {wd}요일</div>',
+                unsafe_allow_html=True,
+            )
+            prev_date = date_str
 
-# ─────────────────────────────────────────────
-# 시간대별 타임라인
-# ─────────────────────────────────────────────
+        hour_label = fmt_hour_label(hour)
+        card_cls   = "tl-card tl-card-active" if is_latest else "tl-card"
+        dot_cls    = "dot-active" if is_latest else "dot-past"
+        line_style = "display:none;" if is_last else ""
 
-df       = df.copy()
-df["hour"] = df["collected_at"].apply(to_kst_hour_key)
-hours    = sorted(df["hour"].dropna().unique(), reverse=True)
+        if issue:
+            stocks_html = stock_chips_html(issue.get("stocks", []))
+            src  = issue.get("source_list", "")
+            cnt  = issue.get("article_count", len(articles))
 
-prev_date  = None
-total_hours = len(hours)
-
-for idx, hour in enumerate(hours):
-
-    hour_df  = df[df["hour"] == hour]
-    articles = hour_df.to_dict("records")
-    is_last  = (idx == total_hours - 1)
-    is_latest = (idx == 0)
-    issue    = issues.get(hour)
-
-    # 날짜 구분선
-    date_str = hour[:10]
-    if date_str != prev_date:
-        y, m, d = date_str.split("-")
-        weekdays = ["월","화","수","목","금","토","일"]
-        wd = weekdays[datetime(int(y), int(m), int(d)).weekday()]
-        st.markdown(
-            f'<div class="date-sep">{y}년 {int(m)}월 {int(d)}일 {wd}요일</div>',
-            unsafe_allow_html=True,
-        )
-        prev_date = date_str
-
-    hour_label = fmt_hour_label(hour)
-    card_cls   = "tl-card tl-card-active" if is_latest else "tl-card"
-    dot_cls    = "dot-active" if is_latest else "dot-past"
-    line_style = "display:none;" if is_last else ""
-
-    # ── 분석 완료 카드 ──
-    if issue:
-        stocks_html = stock_chips_html(issue.get("stocks", []))
-        src  = issue.get("source_list", "")
-        cnt  = issue.get("article_count", len(articles))
-
-        st.markdown(
-            f"""
-            <div class="timeline-item">
-              <div class="timeline-dot {dot_cls}"></div>
-              <div style="position:absolute;left:5px;top:26px;bottom:-4px;
-                          width:2px;background:linear-gradient(to bottom,#2a3a5c,#1a1f2e);
-                          {line_style}"></div>
-              <div class="{card_cls}">
-                <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px;">
-                  <div style="flex:1;">
-                    {sector_html(issue.get("sector","증권"))}
-                    <div class="card-headline">{html.escape(issue.get("headline",""))}</div>
-                    <div class="card-source">{html.escape(src)}</div>
+            st.markdown(
+                f"""
+                <div class="timeline-item">
+                  <div class="timeline-dot {dot_cls}"></div>
+                  <div style="position:absolute;left:5px;top:26px;bottom:-4px;
+                              width:2px;background:linear-gradient(to bottom,#2a3a5c,#1a1f2e);
+                              {line_style}"></div>
+                  <div class="{card_cls}">
+                    <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px;">
+                      <div style="flex:1;">
+                        {sector_html(issue.get("sector","증권"))}
+                        <div class="card-headline">{html.escape(issue.get("headline",""))}</div>
+                        <div class="card-source">{html.escape(src)}</div>
+                      </div>
+                      <span style="font-size:11px;color:#4a5168;background:#1a1d2b;
+                                   padding:3px 8px;border-radius:6px;white-space:nowrap;">
+                        📰 {cnt}건
+                      </span>
+                    </div>
+                    <div class="ai-box">
+                      <div class="ai-label">✦ AI 요약</div>
+                      <div class="ai-text">{html.escape(issue.get("ai_summary","")).replace(chr(10), "<br>")}</div>
+                    </div>
+                    {stocks_html}<div style="font-size:11px;color:#4a5168;margin-top:9px;">🕒 {hour_label}</div>
                   </div>
-                  <span style="font-size:11px;color:#4a5168;background:#1a1d2b;
-                               padding:3px 8px;border-radius:6px;white-space:nowrap;">
-                    📰 {cnt}건
-                  </span>
                 </div>
-                <div class="ai-box">
-                  <div class="ai-label">✦ AI 요약</div>
-                  <div class="ai-text">{html.escape(issue.get("ai_summary","")).replace(chr(10), "<br>")}</div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+            with st.expander(f"📋 {hour_label} 기사 목록 ({len(articles)}건)"):
+                for art in articles:
+                    st.markdown(
+                        f'<div style="padding:6px 0;border-bottom:1px solid #1e2130;">'
+                        f'<span class="art-source">[{art.get("source","")}]</span> '
+                        f'<a href="{art.get("link","#")}" target="_blank" class="art-link">{art.get("title","")}</a>'
+                        f'</div>',
+                        unsafe_allow_html=True,
+                    )
+
+        elif len(articles) > 0:
+            st.markdown(
+                f"""
+                <div class="timeline-item">
+                  <div class="timeline-dot {dot_cls}"></div>
+                  <div style="position:absolute;left:5px;top:26px;bottom:-4px;
+                              width:2px;background:linear-gradient(to bottom,#2a3a5c,#1a1f2e);
+                              {line_style}"></div>
+                  <div class="{card_cls}">
+                    <div style="display:flex;align-items:center;justify-content:space-between;">
+                      <span style="font-size:13px;font-weight:600;color:#7c85a2;">🕒 {hour_label}</span>
+                      <span style="font-size:11px;color:#4a5168;background:#1a1d2b;
+                                   padding:3px 8px;border-radius:6px;">📰 {len(articles)}건 수집됨</span>
+                    </div>
+                    <div style="font-size:12px;color:#4a5168;margin-top:6px;">
+                      AI 분석이 아직 생성되지 않았습니다.
+                    </div>
+                  </div>
                 </div>
-                {stocks_html}<div style="font-size:11px;color:#4a5168;margin-top:9px;">🕒 {hour_label}</div>
-              </div>
-            </div>
-            """,
-            unsafe_allow_html=True,
+                """,
+                unsafe_allow_html=True,
+            )
+
+            if st.button(
+                f"✦ {hour_label} AI 분석 생성",
+                key=f"gen_{hour}_{idx}",
+                use_container_width=False,
+                type="primary",
+            ):
+                with st.spinner(f"{hour_label} 뉴스 {len(articles)}건 분석 중..."):
+                    result = generate_analysis(hour, articles)
+                    save_analysis(hour, result, articles)
+                st.cache_data.clear()
+                st.rerun()
+
+            with st.expander(f"📋 {hour_label} 기사 목록 ({len(articles)}건)"):
+                for art in articles:
+                    st.markdown(
+                        f'<div style="padding:6px 0;border-bottom:1px solid #1e2130;">'
+                        f'<span class="art-source">[{art.get("source","")}]</span> '
+                        f'<a href="{art.get("link","#")}" target="_blank" class="art-link">{art.get("title","")}</a>'
+                        f'</div>',
+                        unsafe_allow_html=True,
+                    )
+
+    st.markdown("<br><br>", unsafe_allow_html=True)
+
+# ══════════════════════════════════════════════
+# 탭 2: AI 판단 추적
+# ══════════════════════════════════════════════
+
+with tab_trace:
+    col_range, col_refresh = st.columns([3, 1])
+    with col_range:
+        hours_back = st.select_slider(
+            "조회 범위",
+            options=[6, 12, 24, 48, 72],
+            value=24,
+            format_func=lambda h: f"최근 {h}시간",
+            label_visibility="collapsed",
         )
-
-        with st.expander(f"📋 {hour_label} 기사 목록 ({len(articles)}건)"):
-            for art in articles:
-                st.markdown(
-                    f'<div style="padding:6px 0;border-bottom:1px solid #1e2130;">'
-                    f'<span class="art-source">[{art.get("source","")}]</span> '
-                    f'<a href="{art.get("link","#")}" target="_blank" class="art-link">{art.get("title","")}</a>'
-                    f'</div>',
-                    unsafe_allow_html=True,
-                )
-
-    # ── 기사는 있으나 미분석 ──
-    elif len(articles) > 0:
-        st.markdown(
-            f"""
-            <div class="timeline-item">
-              <div class="timeline-dot {dot_cls}"></div>
-              <div style="position:absolute;left:5px;top:26px;bottom:-4px;
-                          width:2px;background:linear-gradient(to bottom,#2a3a5c,#1a1f2e);
-                          {line_style}"></div>
-              <div class="{card_cls}">
-                <div style="display:flex;align-items:center;justify-content:space-between;">
-                  <span style="font-size:13px;font-weight:600;color:#7c85a2;">🕒 {hour_label}</span>
-                  <span style="font-size:11px;color:#4a5168;background:#1a1d2b;
-                               padding:3px 8px;border-radius:6px;">📰 {len(articles)}건 수집됨</span>
-                </div>
-                <div style="font-size:12px;color:#4a5168;margin-top:6px;">
-                  AI 분석이 아직 생성되지 않았습니다.
-                </div>
-              </div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-
-        if st.button(
-            f"✦ {hour_label} AI 분석 생성",
-            key=f"gen_{hour}_{idx}",
-            use_container_width=False,
-            type="primary",
-        ):
-            with st.spinner(f"{hour_label} 뉴스 {len(articles)}건 분석 중..."):
-                result = generate_analysis(hour, articles)
-                save_analysis(hour, result, articles)
+    with col_refresh:
+        if st.button("새로고침", use_container_width=True):
             st.cache_data.clear()
-            st.rerun()
 
-        with st.expander(f"📋 {hour_label} 기사 목록 ({len(articles)}건)"):
-            for art in articles:
-                st.markdown(
-                    f'<div style="padding:6px 0;border-bottom:1px solid #1e2130;">'
-                    f'<span class="art-source">[{art.get("source","")}]</span> '
-                    f'<a href="{art.get("link","#")}" target="_blank" class="art-link">{art.get("title","")}</a>'
-                    f'</div>',
-                    unsafe_allow_html=True,
+    traces = load_traces(hours_back=hours_back)
+
+    if not traces:
+        st.markdown("""
+        <div class="empty-state">
+          <div class="empty-icon">🔍</div>
+          <div class="empty-title">추적 로그가 없습니다</div>
+          <div class="empty-desc">파이프라인 실행 후 AI 판단 과정이 여기에 기록됩니다.</div>
+        </div>
+        """, unsafe_allow_html=True)
+    else:
+        # 요약 지표
+        total      = len(traces)
+        dup_count  = sum(1 for t in traces if t.get("is_duplicate"))
+        edit_count = sum(1 for t in traces if not t.get("review_approved", True))
+        retry_total = sum(t.get("retry_count", 0) for t in traces)
+
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("분석 시간대", total)
+        m2.metric("중복 감지", dup_count)
+        m3.metric("이슈 수정", edit_count)
+        m4.metric("총 재선정", retry_total)
+
+        st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
+
+        # 필터
+        fc1, fc2 = st.columns(2)
+        with fc1:
+            only_dup  = st.checkbox("중복 감지된 것만")
+        with fc2:
+            only_edit = st.checkbox("이슈 수정된 것만")
+
+        filtered = traces
+        if only_dup:
+            filtered = [t for t in filtered if t.get("is_duplicate")]
+        if only_edit:
+            filtered = [t for t in filtered if not t.get("review_approved", True)]
+
+        st.markdown(
+            f'<div style="font-size:11px;color:#4a5168;margin-bottom:8px;">{len(filtered)}건 표시 중</div>',
+            unsafe_allow_html=True,
+        )
+
+        for t in filtered:
+            # 배지
+            badges = ""
+            if t.get("is_duplicate"):
+                badges += '<span class="badge-warn">⚠ 중복 감지</span> '
+            if not t.get("review_approved", True):
+                badges += '<span class="badge-edit">✎ 이슈 수정</span> '
+            if not badges:
+                badges = '<span class="badge-ok">✓ 정상</span>'
+
+            # Step 1
+            s1_html = (
+                f'<span class="step-issue">{html.escape(t.get("step1_issue") or "—")}</span> '
+                f'<span style="color:#4a5168">— 입력 {t.get("input_article_count",0)}건 중 '
+                f'{t.get("step1_filtered_count",0)}건 선별</span>'
+            )
+
+            # 입력 기사 목록
+            input_articles = t.get("input_articles") or []
+            if isinstance(input_articles, str):
+                try:
+                    import json as _json
+                    input_articles = _json.loads(input_articles)
+                except Exception:
+                    input_articles = []
+            art_rows = "".join(
+                f'<div class="trace-art-row">'
+                f'<span class="trace-art-src">[{html.escape(a.get("source",""))}]</span>'
+                f'{html.escape(a.get("title",""))}</div>'
+                for a in input_articles[:20]
+            )
+            art_block = f'<div class="trace-articles">{art_rows}</div>' if art_rows else ""
+
+            # Step 1b
+            compared = t.get("compared_headlines") or []
+            if isinstance(compared, str):
+                try:
+                    import json as _json
+                    compared = _json.loads(compared)
+                except Exception:
+                    compared = []
+            if t.get("similarity_checked"):
+                if t.get("is_duplicate"):
+                    s1b_html = (
+                        f'<span class="badge-warn">중복</span> '
+                        f'유사 이슈: <span class="step-issue">{html.escape(t.get("similar_to") or "—")}</span>'
+                        f'<br><span style="color:#4a5168">근거: {html.escape(t.get("similarity_reason") or "")} '
+                        f'/ 재선정 {t.get("retry_count",0)}회 → '
+                        f'<span class="step-issue">{html.escape(t.get("issue_after_dedup") or "")}</span></span>'
+                    )
+                else:
+                    s1b_html = (
+                        f'<span class="badge-ok">통과</span> '
+                        f'<span style="color:#4a5168">{len(compared)}개 최근 이슈와 비교</span>'
+                    )
+            else:
+                s1b_html = '<span style="color:#2a2f45">비교 대상 없음 (첫 실행)</span>'
+
+            # Step 1c
+            if t.get("review_approved", True):
+                s1c_html = (
+                    f'<span class="badge-ok">승인</span> '
+                    f'<span style="color:#4a5168">{html.escape(t.get("review_feedback") or "—")}</span>'
+                )
+            else:
+                s1c_html = (
+                    f'<span class="badge-edit">수정</span> '
+                    f'<span class="step-issue">{html.escape(t.get("issue_after_review") or "")}</span>'
+                    f'<br><span style="color:#4a5168">사유: {html.escape(t.get("review_feedback") or "")}</span>'
                 )
 
-st.markdown("<br><br>", unsafe_allow_html=True)
+            # Step 2
+            s2_html = (
+                f'<span style="color:#60a5fa;font-size:11px;">[{html.escape(t.get("final_sector") or "")}]</span> '
+                f'<span class="step-issue">{html.escape(t.get("final_headline") or "")}</span>'
+            )
+
+            st.markdown(f"""
+            <div class="trace-card">
+              <div class="trace-hour">
+                <span>{t.get("hour","")}&nbsp;
+                  <span style="font-weight:400;color:#4a5168;font-size:11px;">
+                    분석: {t.get("created_at","")}
+                  </span>
+                </span>
+                <span>{badges}</span>
+              </div>
+              <div class="trace-step">
+                <span class="step-label step-s1">Step 1</span>
+                <div class="step-content">
+                  <span style="color:#4a5168">이슈 선정</span><br>
+                  {s1_html}{art_block}
+                </div>
+              </div>
+              <div class="trace-step">
+                <span class="step-label step-s1b">Step 1b</span>
+                <div class="step-content">
+                  <span style="color:#4a5168">유사도 검사</span><br>{s1b_html}
+                </div>
+              </div>
+              <div class="trace-step">
+                <span class="step-label step-s1c">Step 1c</span>
+                <div class="step-content">
+                  <span style="color:#4a5168">검토 Agent</span><br>{s1c_html}
+                </div>
+              </div>
+              <div class="trace-step">
+                <span class="step-label step-s2">Step 2</span>
+                <div class="step-content">
+                  <span style="color:#4a5168">최종 결과</span><br>{s2_html}
+                </div>
+              </div>
+            </div>
+            """, unsafe_allow_html=True)
