@@ -48,20 +48,12 @@ def to_kst_hour_key(ts: str) -> str:
 
 def fmt_hour_label(hour: str) -> str:
     """
-    "YYYY-MM-DD HH:00" → "오전/오후 H시" 한국어 표기로 변환합니다.
-    예: "2026-03-31 21:00" → "오후 9시"
-        "2026-03-31 09:00" → "오전 9시"
+    "YYYY-MM-DD HH:00" → "HH시" 24시간제 한국어 표기로 변환합니다.
+    예: "2026-03-31 21:00" → "21시"
+        "2026-03-31 09:00" → "09시"
     """
     try:
-        h = int(hour[11:13])
-        if h == 0:
-            return "오전 12시"
-        elif h < 12:
-            return f"오전 {h}시"
-        elif h == 12:
-            return "오후 12시"
-        else:
-            return f"오후 {h - 12}시"
+        return f"{hour[11:13]}시"
     except Exception:
         return hour[11:16]
 
