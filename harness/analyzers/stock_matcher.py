@@ -76,20 +76,28 @@ class StockMatcher:
         stock_names = list(listed_stocks.keys())
 
         for result in results:
-            if not result.related_stocks:
-                continue
+            if result.related_stocks:
+                before = [s.name for s in result.related_stocks]
+                verified = self._verify_stocks(result.related_stocks, listed_stocks, stock_names)
 
-            before = [s.name for s in result.related_stocks]
-            verified = self._verify_stocks(result.related_stocks, listed_stocks, stock_names)
+                # 종목 코드 채우기
+                for stock in verified:
+                    if not stock.code and stock.name in listed_stocks:
+                        stock.code = listed_stocks[stock.name]
 
-            # 종목 코드 채우기
-            for stock in verified:
-                if not stock.code and stock.name in listed_stocks:
-                    stock.code = listed_stocks[stock.name]
+                result.related_stocks = verified
+                after = [s.name for s in verified]
+                self._log.info(f"  {result.hour} 종목 검증: {before} → {after}")
 
-            result.related_stocks = verified
-            after = [s.name for s in verified]
-            self._log.info(f"  {result.hour} 종목 검증: {before} → {after}")
+            # 종목이 없으면 이슈 관련 종목 탐색 Agent 실행
+            if not result.related_stocks and self._claude:
+                self._log.info(f"  {result.hour} 관련 종목 없음 → 이슈 종목 탐색 Agent 실행")
+                issue_stocks = self._issue_stock_agent(result.headline, result.sector, listed_stocks, stock_names)
+                for stock in issue_stocks:
+                    if not stock.code and stock.name in listed_stocks:
+                        stock.code = listed_stocks[stock.name]
+                result.related_stocks = issue_stocks
+                self._log.info(f"  {result.hour} 이슈 종목 탐색 결과: {[s.name for s in issue_stocks]}")
 
         return results
 
@@ -162,6 +170,70 @@ class StockMatcher:
             return min(partial, key=len)
 
         return None
+
+    def _issue_stock_agent(
+        self,
+        headline: str,
+        sector: str,
+        listed: dict[str, str],
+        stock_names: list[str],
+    ) -> list[StockMatch]:
+        """이슈 헤드라인과 섹터를 기반으로 관련 종목을 탐색합니다.
+
+        Step 2에서 관련 종목을 추출하지 못했거나 DB 매칭이 모두 실패한 경우 호출됩니다.
+        이슈 내용을 분석하여 관련성이 높은 상장 종목을 제안하고 DB에서 검증합니다.
+        """
+        if not self._claude or not headline:
+            return []
+
+        prompt = f"""다음 이슈와 직접적으로 관련된 KOSPI/KOSDAQ 상장 종목을 찾아주세요.
+
+이슈: {headline}
+섹터: {sector}
+
+이슈 내용을 분석하여 직접 영향을 받을 한국 상장 종목을 최대 5개 선정하세요.
+- 이슈에서 언급된 업종·사업·테마와 관련된 대표 종목
+- 반드시 실제 KOSPI/KOSDAQ 상장 종목명으로 작성
+
+반드시 JSON 배열로만 응답 (없으면 빈 배열 []):
+[
+  {{"name": "상장종목명", "reason": "이슈 관련 이유 20자 이내"}},
+  ...
+]"""
+
+        try:
+            msg = self._claude.messages.create(
+                model=self._haiku_model,
+                max_tokens=300,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            text = msg.content[0].text.strip()
+            if "```" in text:
+                parts = text.split("```")
+                text  = parts[1] if len(parts) > 1 else text
+                if text.lower().startswith("json"):
+                    text = text[4:]
+            if "[" in text:
+                text = text[text.index("["):text.rindex("]") + 1]
+
+            seen: set[str] = set()
+            out:  list[StockMatch] = []
+            for item in json.loads(text):
+                if not isinstance(item, dict):
+                    continue
+                name = item.get("name", "").strip()
+                if not name or name in seen:
+                    continue
+                # DB에서 검증
+                matched = self._match_one(name, listed, stock_names)
+                if matched and matched not in seen:
+                    seen.add(matched)
+                    out.append(StockMatch(name=matched, reason=item.get("reason", "").strip(), source="ai"))
+
+            return out
+        except Exception as e:
+            self._log.warning(f"이슈 종목 탐색 Agent 오류: {e}")
+            return []
 
     def _ai_fallback(self, stocks: list[StockMatch]) -> list[StockMatch]:
         """DB 매칭 실패한 종목을 Haiku로 처리합니다."""

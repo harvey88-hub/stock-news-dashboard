@@ -311,7 +311,7 @@ class SupabaseStore:
     def _row_to_analysis(r: dict) -> AnalysisResult:
         stocks_raw = r.get("stocks") or []
         stocks = [
-            StockMatch(name=s.get("name", ""), reason=s.get("reason", ""))
+            StockMatch(name=s.get("name", ""), reason=s.get("reason", ""), source=s.get("source", "article"))
             for s in stocks_raw
             if isinstance(s, dict)
         ]

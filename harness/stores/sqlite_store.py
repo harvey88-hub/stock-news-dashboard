@@ -186,7 +186,7 @@ class SQLiteStore:
         results = []
         for r in rows:
             stocks_raw = json.loads(r["stocks"] or "[]")
-            stocks = [StockMatch(name=s.get("name", ""), reason=s.get("reason", ""))
+            stocks = [StockMatch(name=s.get("name", ""), reason=s.get("reason", ""), source=s.get("source", "article"))
                       for s in stocks_raw if isinstance(s, dict)]
             results.append(AnalysisResult(
                 hour=r["hour"],

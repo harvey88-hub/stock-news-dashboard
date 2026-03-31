@@ -39,6 +39,7 @@ class StockMatch:
     name: str
     reason: str
     code: str = ""              # 종목 코드 (DB 매칭 후 채워짐)
+    source: str = "article"     # "article": 기사 언급 종목 / "ai": AI 판단 관련 종목
 
 
 @dataclass
@@ -53,7 +54,7 @@ class AnalysisResult:
     source_list: str = ""
 
     def stocks_as_dicts(self) -> list[dict]:
-        return [{"name": s.name, "reason": s.reason} for s in self.related_stocks]
+        return [{"name": s.name, "reason": s.reason, "source": s.source} for s in self.related_stocks]
 
 
 @dataclass

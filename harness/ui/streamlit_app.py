@@ -103,6 +103,15 @@ st.markdown("""
     font-size: 12px; font-weight: 600; padding: 5px 11px;
     border-radius: 8px; background: #1a1d2b; border: 1px solid #252a3d; color: #c8cfe8;
 }
+.stock-chip-ai {
+    display: inline-flex; align-items: center;
+    font-size: 12px; font-weight: 600; padding: 5px 11px;
+    border-radius: 8px; background: rgba(167,139,250,0.08); border: 1px solid rgba(167,139,250,0.3); color: #a78bfa;
+}
+.stock-group-label {
+    font-size: 10px; font-weight: 700; color: #4a5168;
+    margin-bottom: 4px; margin-top: 6px;
+}
 
 /* 빈 상태 */
 .empty-state { text-align: center; padding: 60px 20px; }
@@ -199,10 +208,23 @@ with tab_timeline:
         """, unsafe_allow_html=True)
     else:
         for result in analyses:
-            stocks_html = ""
-            for stock in result.related_stocks:
-                tip = stock.reason if stock.reason else stock.name
-                stocks_html += f'<span class="stock-chip" title="{tip}">{stock.name}</span>'
+            article_stocks = [s for s in result.related_stocks if s.source != "ai"]
+            ai_stocks      = [s for s in result.related_stocks if s.source == "ai"]
+
+            article_chips = "".join(
+                f'<span class="stock-chip" title="{s.reason or s.name}">{s.name}</span>'
+                for s in article_stocks
+            )
+            ai_chips = "".join(
+                f'<span class="stock-chip-ai" title="{s.reason or s.name}">✦ {s.name}</span>'
+                for s in ai_stocks
+            )
+
+            stocks_block = ""
+            if article_chips:
+                stocks_block += f'<div class="stock-group-label">기사 언급</div><div class="stock-row">{article_chips}</div>'
+            if ai_chips:
+                stocks_block += f'<div class="stock-group-label">AI 관련주</div><div class="stock-row">{ai_chips}</div>'
 
             st.markdown(f"""
             <div class="tl-card">
@@ -213,7 +235,7 @@ with tab_timeline:
                     <div class="ai-label">🤖 AI 분석</div>
                     <div class="ai-text">{result.ai_summary}</div>
                 </div>
-                <div class="stock-row">{stocks_html}</div>
+                {stocks_block}
             </div>
             """, unsafe_allow_html=True)
 
