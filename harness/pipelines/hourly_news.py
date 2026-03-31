@@ -90,12 +90,21 @@ class HourlyNewsPipeline:
         else:
             log.step("[dry-run] 기사 저장 스킵")
 
-        # ── Step 3: 이미 분석된 시간대 확인 ───────────────
+        # ── Step 3: 이미 분석된 시간대 + 최근 헤드라인 확인 ─
         analyzed_hours = self._store.get_analyzed_hours(hours_back=self._config.hours_back)
+        try:
+            recent_analyses  = self._store.get_analyses(hours_back=self._config.hours_back)
+            recent_headlines = [r.headline for r in recent_analyses if r.headline]
+        except Exception:
+            recent_headlines = []
 
         # ── Step 4: Claude 분석 ──────────────────────────
         log.step("Claude 시간대별 분석 중...")
-        results = self._claude.analyze(articles, analyzed_hours=analyzed_hours)
+        results = self._claude.analyze(
+            articles,
+            analyzed_hours=analyzed_hours,
+            recent_headlines=recent_headlines,
+        )
         summary["analyzed"] = len(results)
         log.success(f"{len(results)}개 시간대 분석 완료")
 
@@ -117,5 +126,17 @@ class HourlyNewsPipeline:
             log.success(f"{saved}건 저장")
         elif dry_run:
             log.step("[dry-run] 분석 결과 저장 스킵")
+
+        # ── Step 7: AI 판단 추적 로그 저장 ───────────────
+        traces = self._claude.flush_traces()
+        if traces and not dry_run:
+            log.step(f"AI 판단 추적 로그 {len(traces)}건 저장 중...")
+            try:
+                self._store.save_traces(traces)
+                log.success(f"{len(traces)}건 저장")
+            except Exception as e:
+                log.warn(f"추적 로그 저장 실패 (파이프라인은 계속): {e}")
+        elif dry_run and traces:
+            log.step(f"[dry-run] 추적 로그 저장 스킵 ({len(traces)}건 수집됨)")
 
         return summary

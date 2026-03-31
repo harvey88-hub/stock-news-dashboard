@@ -12,7 +12,7 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 from core.config import AppConfig
-from core.interfaces import Article, AnalysisResult, StockMatch, ListedStock
+from core.interfaces import Article, AnalysisResult, StockMatch, ListedStock, AnalysisTrace
 from core.logging import get_logger
 
 KST = timezone(timedelta(hours=9))
@@ -66,6 +66,27 @@ class SQLiteStore:
                     isin_code  TEXT,
                     corp_name  TEXT,
                     updated_at TEXT
+                );
+                CREATE TABLE IF NOT EXISTS analysis_traces (
+                    id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+                    hour                 TEXT NOT NULL,
+                    created_at           TEXT,
+                    input_article_count  INTEGER DEFAULT 0,
+                    input_articles       TEXT,   -- JSON [{source, title}]
+                    step1_issue          TEXT,
+                    step1_filtered_count INTEGER DEFAULT 0,
+                    similarity_checked   INTEGER DEFAULT 0,
+                    compared_headlines   TEXT,   -- JSON [str]
+                    is_duplicate         INTEGER DEFAULT 0,
+                    similar_to           TEXT,
+                    similarity_reason    TEXT,
+                    retry_count          INTEGER DEFAULT 0,
+                    issue_after_dedup    TEXT,
+                    review_approved      INTEGER DEFAULT 1,
+                    review_feedback      TEXT,
+                    issue_after_review   TEXT,
+                    final_headline       TEXT,
+                    final_sector         TEXT
                 );
             """)
         self._log.info(f"SQLite DB 초기화 완료: {self._path}")
@@ -190,3 +211,67 @@ class SQLiteStore:
         with self._conn() as conn:
             rows = conn.execute(sql, (cutoff,)).fetchall()
         return {r["hour"] for r in rows}
+
+    def save_traces(self, traces: list[AnalysisTrace]) -> int:
+        if not traces:
+            return 0
+        sql = """
+            INSERT INTO analysis_traces (
+                hour, created_at,
+                input_article_count, input_articles,
+                step1_issue, step1_filtered_count,
+                similarity_checked, compared_headlines,
+                is_duplicate, similar_to, similarity_reason,
+                retry_count, issue_after_dedup,
+                review_approved, review_feedback, issue_after_review,
+                final_headline, final_sector
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """
+        rows = [
+            (
+                t.hour, t.created_at,
+                t.input_article_count,
+                json.dumps(t.input_articles, ensure_ascii=False),
+                t.step1_issue, t.step1_filtered_count,
+                int(t.similarity_checked),
+                json.dumps(t.compared_headlines, ensure_ascii=False),
+                int(t.is_duplicate), t.similar_to, t.similarity_reason,
+                t.retry_count, t.issue_after_dedup,
+                int(t.review_approved), t.review_feedback, t.issue_after_review,
+                t.final_headline, t.final_sector,
+            )
+            for t in traces
+        ]
+        with self._conn() as conn:
+            conn.executemany(sql, rows)
+        self._log.info(f"traces 저장: {len(rows)}건")
+        return len(rows)
+
+    def get_traces(self, hours_back: int = 24) -> list[AnalysisTrace]:
+        cutoff = (datetime.now(KST) - timedelta(hours=hours_back)).strftime("%Y-%m-%d %H:%M")
+        sql    = "SELECT * FROM analysis_traces WHERE hour >= ? ORDER BY created_at DESC"
+        with self._conn() as conn:
+            rows = conn.execute(sql, (cutoff,)).fetchall()
+        return [
+            AnalysisTrace(
+                hour=r["hour"],
+                created_at=r["created_at"] or "",
+                input_article_count=r["input_article_count"] or 0,
+                input_articles=json.loads(r["input_articles"] or "[]"),
+                step1_issue=r["step1_issue"] or "",
+                step1_filtered_count=r["step1_filtered_count"] or 0,
+                similarity_checked=bool(r["similarity_checked"]),
+                compared_headlines=json.loads(r["compared_headlines"] or "[]"),
+                is_duplicate=bool(r["is_duplicate"]),
+                similar_to=r["similar_to"] or "",
+                similarity_reason=r["similarity_reason"] or "",
+                retry_count=r["retry_count"] or 0,
+                issue_after_dedup=r["issue_after_dedup"] or "",
+                review_approved=bool(r["review_approved"]),
+                review_feedback=r["review_feedback"] or "",
+                issue_after_review=r["issue_after_review"] or "",
+                final_headline=r["final_headline"] or "",
+                final_sector=r["final_sector"] or "",
+            )
+            for r in rows
+        ]

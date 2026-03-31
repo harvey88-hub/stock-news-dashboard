@@ -9,7 +9,7 @@ from __future__ import annotations
 from datetime import datetime, timezone, timedelta
 
 from core.config import AppConfig
-from core.interfaces import Article, AnalysisResult, StockMatch, ListedStock
+from core.interfaces import Article, AnalysisResult, StockMatch, ListedStock, AnalysisTrace
 from core.logging import get_logger
 from core.errors import StoreError, ConfigError
 
@@ -168,6 +168,103 @@ class SupabaseStore:
             return {r["hour"] for r in (result.data or [])}
         except Exception as e:
             raise StoreError("supabase", f"analyzed_hours 조회 실패: {e}") from e
+
+    def save_traces(self, traces: list[AnalysisTrace]) -> int:
+        """AI 분석 과정 추적 로그를 analysis_traces 테이블에 저장합니다.
+
+        Supabase에서 아래 SQL로 테이블을 먼저 생성해야 합니다:
+
+            CREATE TABLE analysis_traces (
+                id                   BIGINT PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+                hour                 TEXT NOT NULL,
+                created_at           TEXT,
+                input_article_count  INT DEFAULT 0,
+                input_articles       JSONB,
+                step1_issue          TEXT,
+                step1_filtered_count INT DEFAULT 0,
+                similarity_checked   BOOLEAN DEFAULT FALSE,
+                compared_headlines   JSONB,
+                is_duplicate         BOOLEAN DEFAULT FALSE,
+                similar_to           TEXT,
+                similarity_reason    TEXT,
+                retry_count          INT DEFAULT 0,
+                issue_after_dedup    TEXT,
+                review_approved      BOOLEAN DEFAULT TRUE,
+                review_feedback      TEXT,
+                issue_after_review   TEXT,
+                final_headline       TEXT,
+                final_sector         TEXT
+            );
+        """
+        if not traces:
+            return 0
+        rows = [
+            {
+                "hour":                 t.hour,
+                "created_at":           t.created_at,
+                "input_article_count":  t.input_article_count,
+                "input_articles":       t.input_articles,
+                "step1_issue":          t.step1_issue,
+                "step1_filtered_count": t.step1_filtered_count,
+                "similarity_checked":   t.similarity_checked,
+                "compared_headlines":   t.compared_headlines,
+                "is_duplicate":         t.is_duplicate,
+                "similar_to":           t.similar_to,
+                "similarity_reason":    t.similarity_reason,
+                "retry_count":          t.retry_count,
+                "issue_after_dedup":    t.issue_after_dedup,
+                "review_approved":      t.review_approved,
+                "review_feedback":      t.review_feedback,
+                "issue_after_review":   t.issue_after_review,
+                "final_headline":       t.final_headline,
+                "final_sector":         t.final_sector,
+            }
+            for t in traces
+        ]
+        try:
+            result = self._client.table("analysis_traces").insert(rows).execute()
+            count  = len(result.data) if result.data else 0
+            self._log.info(f"traces 저장: {count}건")
+            return count
+        except Exception as e:
+            raise StoreError("supabase", f"traces 저장 실패: {e}") from e
+
+    def get_traces(self, hours_back: int = 24) -> list[AnalysisTrace]:
+        """최근 N시간 이내 분석 추적 로그를 반환합니다."""
+        cutoff = (datetime.now(KST) - timedelta(hours=hours_back)).strftime("%Y-%m-%d %H:%M")
+        try:
+            result = (
+                self._client.table("analysis_traces")
+                .select("*")
+                .gte("hour", cutoff)
+                .order("created_at", desc=True)
+                .execute()
+            )
+            return [
+                AnalysisTrace(
+                    hour=r.get("hour", ""),
+                    created_at=r.get("created_at", ""),
+                    input_article_count=r.get("input_article_count", 0),
+                    input_articles=r.get("input_articles") or [],
+                    step1_issue=r.get("step1_issue", ""),
+                    step1_filtered_count=r.get("step1_filtered_count", 0),
+                    similarity_checked=bool(r.get("similarity_checked")),
+                    compared_headlines=r.get("compared_headlines") or [],
+                    is_duplicate=bool(r.get("is_duplicate")),
+                    similar_to=r.get("similar_to", ""),
+                    similarity_reason=r.get("similarity_reason", ""),
+                    retry_count=r.get("retry_count", 0),
+                    issue_after_dedup=r.get("issue_after_dedup", ""),
+                    review_approved=bool(r.get("review_approved", True)),
+                    review_feedback=r.get("review_feedback", ""),
+                    issue_after_review=r.get("issue_after_review", ""),
+                    final_headline=r.get("final_headline", ""),
+                    final_sector=r.get("final_sector", ""),
+                )
+                for r in (result.data or [])
+            ]
+        except Exception as e:
+            raise StoreError("supabase", f"traces 조회 실패: {e}") from e
 
     # ──────────────────────────────────────
     # 변환 헬퍼

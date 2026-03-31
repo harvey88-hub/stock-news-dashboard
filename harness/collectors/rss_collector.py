@@ -10,6 +10,7 @@ RSS 수집 로직을 하나로 통합합니다.
 """
 
 from __future__ import annotations
+import time
 import requests
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone, timedelta
@@ -98,33 +99,50 @@ class RssCollector:
         now_kst: datetime,
         cutoff: datetime,
     ) -> list[Article]:
-        """단일 RSS 피드를 파싱하여 Article 목록을 반환합니다."""
-        resp = requests.get(
-            url,
-            headers={"User-Agent": self._cfg.user_agent},
-            timeout=self._cfg.timeout_seconds,
-        )
-        resp.raise_for_status()
+        """단일 RSS 피드를 파싱하여 Article 목록을 반환합니다. 네트워크 오류 시 최대 3회 재시도."""
+        max_retries = 3
+        last_exc: Exception | None = None
 
-        # XML 파싱 (EUC-KR 인코딩 대응)
-        content = resp.content
-        try:
-            root = ET.fromstring(content)
-        except ET.ParseError:
-            content = resp.content.decode("euc-kr").encode("utf-8")
-            root = ET.fromstring(content)
+        for attempt in range(max_retries):
+            try:
+                resp = requests.get(
+                    url,
+                    headers={"User-Agent": self._cfg.user_agent},
+                    timeout=self._cfg.timeout_seconds,
+                )
+                resp.raise_for_status()
 
-        entries = root.findall(".//item")
-        if not entries:
-            entries = root.findall(".//{http://www.w3.org/2005/Atom}entry")
+                # XML 파싱 (EUC-KR 인코딩 대응)
+                content = resp.content
+                try:
+                    root = ET.fromstring(content)
+                except ET.ParseError:
+                    content = resp.content.decode("euc-kr").encode("utf-8")
+                    root = ET.fromstring(content)
 
-        items: list[Article] = []
-        for entry in entries:
-            article = self._parse_entry(source_name, entry, now_kst, cutoff)
-            if article:
-                items.append(article)
+                entries = root.findall(".//item")
+                if not entries:
+                    entries = root.findall(".//{http://www.w3.org/2005/Atom}entry")
 
-        return items
+                items: list[Article] = []
+                for entry in entries:
+                    article = self._parse_entry(source_name, entry, now_kst, cutoff)
+                    if article:
+                        items.append(article)
+
+                return items
+
+            except Exception as e:
+                last_exc = e
+                if attempt < max_retries - 1:
+                    wait = 2 ** attempt  # 1초, 2초
+                    self._log.warning(
+                        f"      [{source_name}] 재시도 {attempt + 1}/{max_retries - 1} "
+                        f"({type(e).__name__}) — {wait}초 후 재시도"
+                    )
+                    time.sleep(wait)
+
+        raise last_exc
 
     def _parse_entry(
         self,
