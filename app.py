@@ -15,6 +15,56 @@ from datetime import datetime, timezone, timedelta
 KST        = timezone(timedelta(hours=9))
 HOURS_BACK = 24
 
+
+def to_kst_hour_key(ts: str) -> str:
+    """
+    다양한 포맷의 collected_at 문자열을 KST 시간대 키 "YYYY-MM-DD HH:00" 로 변환합니다.
+    지원 포맷:
+      - "YYYY-MM-DD HH:MM"        (KST 텍스트, 기본)
+      - "YYYY-MM-DDTHH:MM:SS+HH:MM"  (ISO 8601 with timezone)
+      - "YYYY-MM-DDTHH:MM:SSZ"       (ISO 8601 UTC)
+    """
+    if not ts:
+        return ""
+    try:
+        ts = ts.strip()
+        if "T" in ts:
+            # ISO 포맷 파싱 후 KST 변환
+            for fmt in ("%Y-%m-%dT%H:%M:%S%z", "%Y-%m-%dT%H:%M%z"):
+                try:
+                    dt = datetime.strptime(ts[:25], fmt)
+                    return dt.astimezone(KST).strftime("%Y-%m-%d %H:00")
+                except ValueError:
+                    continue
+            # timezone 없는 ISO → UTC로 간주
+            dt = datetime.fromisoformat(ts[:19]).replace(tzinfo=timezone.utc)
+            return dt.astimezone(KST).strftime("%Y-%m-%d %H:00")
+        else:
+            # "YYYY-MM-DD HH:MM" 텍스트 (KST)
+            return ts[:13] + ":00"
+    except Exception:
+        return ts[:13] + ":00" if len(ts) >= 13 else ""
+
+
+def fmt_hour_label(hour: str) -> str:
+    """
+    "YYYY-MM-DD HH:00" → "오전/오후 H시" 한국어 표기로 변환합니다.
+    예: "2026-03-31 21:00" → "오후 9시"
+        "2026-03-31 09:00" → "오전 9시"
+    """
+    try:
+        h = int(hour[11:13])
+        if h == 0:
+            return "오전 12시"
+        elif h < 12:
+            return f"오전 {h}시"
+        elif h == 12:
+            return "오후 12시"
+        else:
+            return f"오후 {h - 12}시"
+    except Exception:
+        return hour[11:16]
+
 # ─────────────────────────────────────────────
 # 페이지 설정
 # ─────────────────────────────────────────────
@@ -536,7 +586,7 @@ if issues:
 # ─────────────────────────────────────────────
 
 df       = df.copy()
-df["hour"] = df["collected_at"].str[:13] + ":00"
+df["hour"] = df["collected_at"].apply(to_kst_hour_key)
 hours    = sorted(df["hour"].dropna().unique(), reverse=True)
 
 prev_date  = None
@@ -562,7 +612,7 @@ for idx, hour in enumerate(hours):
         )
         prev_date = date_str
 
-    hour_label = hour[11:16]
+    hour_label = fmt_hour_label(hour)
     card_cls   = "tl-card tl-card-active" if is_latest else "tl-card"
     dot_cls    = "dot-active" if is_latest else "dot-past"
     line_style = "display:none;" if is_last else ""
