@@ -639,8 +639,7 @@ for idx, hour in enumerate(hours):
                   <div class="ai-label">✦ AI 요약</div>
                   <div class="ai-text">{html.escape(issue.get("ai_summary","")).replace(chr(10), "<br>")}</div>
                 </div>
-                {stocks_html}
-                <div style="font-size:11px;color:#4a5168;margin-top:9px;">🕒 {hour_label}</div>
+                {stocks_html}<div style="font-size:11px;color:#4a5168;margin-top:9px;">🕒 {hour_label}</div>
               </div>
             </div>
             """,
