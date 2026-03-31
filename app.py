@@ -5,6 +5,7 @@ AI 마켓 타임라인
 Claude AI가 섹터·헤드라인·요약·관련 종목을 분석합니다.
 """
 
+import html
 import json
 import anthropic
 import streamlit as st
@@ -455,8 +456,8 @@ def stock_chips_html(stocks) -> str:
             reason = ""
         if not name:
             continue
-        tooltip = f'<span class="tooltip">{reason}</span>' if reason else ""
-        chips.append(f'<span class="stock-chip">{name}{tooltip}</span>')
+        tooltip = f'<span class="tooltip">{html.escape(reason)}</span>' if reason else ""
+        chips.append(f'<span class="stock-chip">{html.escape(name)}{tooltip}</span>')
     return f'<div class="stock-row">{"".join(chips)}</div>'
 
 
@@ -626,8 +627,8 @@ for idx, hour in enumerate(hours):
                 <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px;">
                   <div style="flex:1;">
                     {sector_html(issue.get("sector","증권"))}
-                    <div class="card-headline">{issue.get("headline","")}</div>
-                    <div class="card-source">{src}</div>
+                    <div class="card-headline">{html.escape(issue.get("headline",""))}</div>
+                    <div class="card-source">{html.escape(src)}</div>
                   </div>
                   <span style="font-size:11px;color:#4a5168;background:#1a1d2b;
                                padding:3px 8px;border-radius:6px;white-space:nowrap;">
@@ -636,7 +637,7 @@ for idx, hour in enumerate(hours):
                 </div>
                 <div class="ai-box">
                   <div class="ai-label">✦ AI 요약</div>
-                  <div class="ai-text">{issue.get("ai_summary","")}</div>
+                  <div class="ai-text">{html.escape(issue.get("ai_summary","")).replace(chr(10), "<br>")}</div>
                 </div>
                 {stocks_html}
                 <div style="font-size:11px;color:#4a5168;margin-top:9px;">🕒 {hour_label}</div>
