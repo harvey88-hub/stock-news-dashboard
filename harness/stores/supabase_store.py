@@ -9,7 +9,7 @@ from __future__ import annotations
 from datetime import datetime, timezone, timedelta
 
 from core.config import AppConfig
-from core.interfaces import Article, AnalysisResult, StockMatch, ListedStock, AnalysisTrace
+from core.interfaces import Article, AnalysisResult, StockMatch, ListedStock, AnalysisTrace, DailySummary
 from core.logging import get_logger
 from core.errors import StoreError, ConfigError
 
@@ -175,49 +175,104 @@ class SupabaseStore:
         Supabase에서 아래 SQL로 테이블을 먼저 생성해야 합니다:
 
             CREATE TABLE analysis_traces (
-                id                   BIGINT PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
-                hour                 TEXT NOT NULL,
-                created_at           TEXT,
-                input_article_count  INT DEFAULT 0,
-                input_articles       JSONB,
-                step1_issue          TEXT,
-                step1_filtered_count INT DEFAULT 0,
-                similarity_checked   BOOLEAN DEFAULT FALSE,
-                compared_headlines   JSONB,
-                is_duplicate         BOOLEAN DEFAULT FALSE,
-                similar_to           TEXT,
-                similarity_reason    TEXT,
-                retry_count          INT DEFAULT 0,
-                issue_after_dedup    TEXT,
-                review_approved      BOOLEAN DEFAULT TRUE,
-                review_feedback      TEXT,
-                issue_after_review   TEXT,
-                final_headline       TEXT,
-                final_sector         TEXT
+                id                       BIGINT PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+                hour                     TEXT NOT NULL,
+                created_at               TEXT,
+                input_article_count      INT DEFAULT 0,
+                input_articles           JSONB,
+                step1_issue              TEXT,
+                step1_filtered_count     INT DEFAULT 0,
+                -- Step 0
+                step0_removed_count      INT DEFAULT 0,
+                step0_removal_reasons    JSONB,
+                -- Step 1b
+                similarity_checked       BOOLEAN DEFAULT FALSE,
+                compared_headlines       JSONB,
+                is_duplicate             BOOLEAN DEFAULT FALSE,
+                similar_to               TEXT,
+                similarity_reason        TEXT,
+                retry_count              INT DEFAULT 0,
+                issue_after_dedup        TEXT,
+                is_evolution             BOOLEAN DEFAULT FALSE,
+                evolution_of             TEXT,
+                evolution_type           TEXT,
+                -- Step 1c
+                review_approved          BOOLEAN DEFAULT TRUE,
+                review_feedback          TEXT,
+                issue_after_review       TEXT,
+                -- Step 2
+                final_headline           TEXT,
+                final_sector             TEXT,
+                -- Step 2b
+                factcheck_passed         BOOLEAN DEFAULT TRUE,
+                factcheck_corrections    JSONB,
+                headline_before_factcheck TEXT,
+                -- Step 2c
+                summary_quality_passed   BOOLEAN DEFAULT TRUE,
+                summary_regenerated      BOOLEAN DEFAULT FALSE,
+                summary_quality_feedback TEXT,
+                -- Scoring
+                impact_score             INT DEFAULT 0,
+                impact_score_reason      TEXT,
+                -- 스킵
+                skipped                  BOOLEAN DEFAULT FALSE,
+                no_issue_reason          TEXT
             );
+
+            -- 기존 테이블에 컬럼 추가 (이미 테이블이 있는 경우):
+            -- ALTER TABLE analysis_traces ADD COLUMN IF NOT EXISTS step0_removed_count INT DEFAULT 0;
+            -- ALTER TABLE analysis_traces ADD COLUMN IF NOT EXISTS step0_removal_reasons JSONB;
+            -- ALTER TABLE analysis_traces ADD COLUMN IF NOT EXISTS is_evolution BOOLEAN DEFAULT FALSE;
+            -- ALTER TABLE analysis_traces ADD COLUMN IF NOT EXISTS evolution_of TEXT;
+            -- ALTER TABLE analysis_traces ADD COLUMN IF NOT EXISTS evolution_type TEXT;
+            -- ALTER TABLE analysis_traces ADD COLUMN IF NOT EXISTS factcheck_passed BOOLEAN DEFAULT TRUE;
+            -- ALTER TABLE analysis_traces ADD COLUMN IF NOT EXISTS factcheck_corrections JSONB;
+            -- ALTER TABLE analysis_traces ADD COLUMN IF NOT EXISTS headline_before_factcheck TEXT;
+            -- ALTER TABLE analysis_traces ADD COLUMN IF NOT EXISTS summary_quality_passed BOOLEAN DEFAULT TRUE;
+            -- ALTER TABLE analysis_traces ADD COLUMN IF NOT EXISTS summary_regenerated BOOLEAN DEFAULT FALSE;
+            -- ALTER TABLE analysis_traces ADD COLUMN IF NOT EXISTS summary_quality_feedback TEXT;
+            -- ALTER TABLE analysis_traces ADD COLUMN IF NOT EXISTS impact_score INT DEFAULT 0;
+            -- ALTER TABLE analysis_traces ADD COLUMN IF NOT EXISTS impact_score_reason TEXT;
+            -- ALTER TABLE analysis_traces ADD COLUMN IF NOT EXISTS skipped BOOLEAN DEFAULT FALSE;
+            -- ALTER TABLE analysis_traces ADD COLUMN IF NOT EXISTS no_issue_reason TEXT;
         """
         if not traces:
             return 0
         rows = [
             {
-                "hour":                 t.hour,
-                "created_at":           t.created_at,
-                "input_article_count":  t.input_article_count,
-                "input_articles":       t.input_articles,
-                "step1_issue":          t.step1_issue,
-                "step1_filtered_count": t.step1_filtered_count,
-                "similarity_checked":   t.similarity_checked,
-                "compared_headlines":   t.compared_headlines,
-                "is_duplicate":         t.is_duplicate,
-                "similar_to":           t.similar_to,
-                "similarity_reason":    t.similarity_reason,
-                "retry_count":          t.retry_count,
-                "issue_after_dedup":    t.issue_after_dedup,
-                "review_approved":      t.review_approved,
-                "review_feedback":      t.review_feedback,
-                "issue_after_review":   t.issue_after_review,
-                "final_headline":       t.final_headline,
-                "final_sector":         t.final_sector,
+                "hour":                       t.hour,
+                "created_at":                 t.created_at,
+                "input_article_count":        t.input_article_count,
+                "input_articles":             t.input_articles,
+                "step1_issue":                t.step1_issue,
+                "step1_filtered_count":       t.step1_filtered_count,
+                "step0_removed_count":        t.step0_removed_count,
+                "step0_removal_reasons":      t.step0_removal_reasons,
+                "similarity_checked":         t.similarity_checked,
+                "compared_headlines":         t.compared_headlines,
+                "is_duplicate":               t.is_duplicate,
+                "similar_to":                 t.similar_to,
+                "similarity_reason":          t.similarity_reason,
+                "retry_count":                t.retry_count,
+                "issue_after_dedup":          t.issue_after_dedup,
+                "is_evolution":               t.is_evolution,
+                "evolution_of":               t.evolution_of,
+                "evolution_type":             t.evolution_type,
+                "review_approved":            t.review_approved,
+                "review_feedback":            t.review_feedback,
+                "issue_after_review":         t.issue_after_review,
+                "final_headline":             t.final_headline,
+                "final_sector":               t.final_sector,
+                "factcheck_passed":           t.factcheck_passed,
+                "factcheck_corrections":      t.factcheck_corrections,
+                "headline_before_factcheck":  t.headline_before_factcheck,
+                "summary_quality_passed":     t.summary_quality_passed,
+                "summary_regenerated":        t.summary_regenerated,
+                "summary_quality_feedback":   t.summary_quality_feedback,
+                "impact_score":               t.impact_score,
+                "impact_score_reason":        t.impact_score_reason,
+                "skipped":                    t.skipped,
+                "no_issue_reason":            t.no_issue_reason,
             }
             for t in traces
         ]
@@ -248,6 +303,8 @@ class SupabaseStore:
                     input_articles=r.get("input_articles") or [],
                     step1_issue=r.get("step1_issue", ""),
                     step1_filtered_count=r.get("step1_filtered_count", 0),
+                    step0_removed_count=r.get("step0_removed_count", 0) or 0,
+                    step0_removal_reasons=r.get("step0_removal_reasons") or [],
                     similarity_checked=bool(r.get("similarity_checked")),
                     compared_headlines=r.get("compared_headlines") or [],
                     is_duplicate=bool(r.get("is_duplicate")),
@@ -255,16 +312,83 @@ class SupabaseStore:
                     similarity_reason=r.get("similarity_reason", ""),
                     retry_count=r.get("retry_count", 0),
                     issue_after_dedup=r.get("issue_after_dedup", ""),
+                    is_evolution=bool(r.get("is_evolution", False)),
+                    evolution_of=r.get("evolution_of", "") or "",
+                    evolution_type=r.get("evolution_type", "") or "",
                     review_approved=bool(r.get("review_approved", True)),
                     review_feedback=r.get("review_feedback", ""),
                     issue_after_review=r.get("issue_after_review", ""),
                     final_headline=r.get("final_headline", ""),
                     final_sector=r.get("final_sector", ""),
+                    factcheck_passed=bool(r.get("factcheck_passed", True)),
+                    factcheck_corrections=r.get("factcheck_corrections") or [],
+                    headline_before_factcheck=r.get("headline_before_factcheck", "") or "",
+                    summary_quality_passed=bool(r.get("summary_quality_passed", True)),
+                    summary_regenerated=bool(r.get("summary_regenerated", False)),
+                    summary_quality_feedback=r.get("summary_quality_feedback", "") or "",
+                    impact_score=r.get("impact_score", 0) or 0,
+                    impact_score_reason=r.get("impact_score_reason", "") or "",
+                    skipped=bool(r.get("skipped", False)),
+                    no_issue_reason=r.get("no_issue_reason", ""),
                 )
                 for r in (result.data or [])
             ]
         except Exception as e:
             raise StoreError("supabase", f"traces 조회 실패: {e}") from e
+
+    def save_daily_summary(self, summary: DailySummary) -> bool:
+        """일일 브리핑 요약을 daily_summaries 테이블에 upsert합니다.
+
+        Supabase에서 아래 SQL로 테이블을 먼저 생성해야 합니다:
+
+            CREATE TABLE daily_summaries (
+                date         TEXT PRIMARY KEY,
+                created_at   TEXT,
+                top_issues   JSONB,
+                market_flow  TEXT,
+                hot_sectors  JSONB,
+                hot_stocks   JSONB
+            );
+        """
+        row = {
+            "date":        summary.date,
+            "created_at":  summary.created_at,
+            "top_issues":  summary.top_issues,
+            "market_flow": summary.market_flow,
+            "hot_sectors": summary.hot_sectors,
+            "hot_stocks":  summary.hot_stocks,
+        }
+        try:
+            self._client.table("daily_summaries").upsert(row, on_conflict="date").execute()
+            self._log.info(f"daily_summary 저장: {summary.date}")
+            return True
+        except Exception as e:
+            raise StoreError("supabase", f"daily_summary 저장 실패: {e}") from e
+
+    def get_daily_summary(self, date: str) -> DailySummary | None:
+        """특정 날짜(YYYY-MM-DD)의 일일 브리핑 요약을 반환합니다. 없으면 None."""
+        try:
+            result = (
+                self._client.table("daily_summaries")
+                .select("*")
+                .eq("date", date)
+                .limit(1)
+                .execute()
+            )
+            rows = result.data or []
+            if not rows:
+                return None
+            r = rows[0]
+            return DailySummary(
+                date=r.get("date", date),
+                created_at=r.get("created_at", ""),
+                top_issues=r.get("top_issues") or [],
+                market_flow=r.get("market_flow", "") or "",
+                hot_sectors=r.get("hot_sectors") or [],
+                hot_stocks=r.get("hot_stocks") or [],
+            )
+        except Exception as e:
+            raise StoreError("supabase", f"daily_summary 조회 실패: {e}") from e
 
     # ──────────────────────────────────────
     # 변환 헬퍼
@@ -298,13 +422,16 @@ class SupabaseStore:
     def _analysis_to_row(r: AnalysisResult) -> dict:
         sources = r.source_list
         return {
-            "hour":          r.hour,
-            "sector":        r.sector,
-            "headline":      r.headline,
-            "ai_summary":    r.ai_summary,
-            "stocks":        r.stocks_as_dicts(),
-            "article_count": r.article_count,
-            "source_list":   sources,
+            "hour":           r.hour,
+            "sector":         r.sector,
+            "headline":       r.headline,
+            "ai_summary":     r.ai_summary,
+            "stocks":         r.stocks_as_dicts(),
+            "article_count":  r.article_count,
+            "source_list":    sources,
+            "impact_score":   r.impact_score,
+            "is_evolution":   r.is_evolution,
+            "evolution_type": r.evolution_type,
         }
 
     @staticmethod
@@ -323,6 +450,9 @@ class SupabaseStore:
             related_stocks=stocks,
             article_count=r.get("article_count", 0),
             source_list=r.get("source_list", ""),
+            impact_score=r.get("impact_score", 0) or 0,
+            is_evolution=bool(r.get("is_evolution", False)),
+            evolution_type=r.get("evolution_type", "") or "",
         )
 
     @staticmethod

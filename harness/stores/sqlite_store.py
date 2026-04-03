@@ -12,7 +12,7 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 from core.config import AppConfig
-from core.interfaces import Article, AnalysisResult, StockMatch, ListedStock, AnalysisTrace
+from core.interfaces import Article, AnalysisResult, StockMatch, ListedStock, AnalysisTrace, DailySummary
 from core.logging import get_logger
 
 KST = timezone(timedelta(hours=9))
@@ -36,7 +36,7 @@ class SQLiteStore:
     # ──────────────────────────────────────
 
     def _init_db(self):
-        """테이블이 없으면 생성합니다."""
+        """테이블이 없으면 생성하고, 기존 테이블에 누락된 컬럼을 추가합니다."""
         with self._conn() as conn:
             conn.executescript("""
                 CREATE TABLE IF NOT EXISTS news_articles (
@@ -51,13 +51,16 @@ class SQLiteStore:
                     created_at   TEXT DEFAULT (datetime('now'))
                 );
                 CREATE TABLE IF NOT EXISTS timeline_issues (
-                    hour          TEXT PRIMARY KEY,
-                    sector        TEXT,
-                    headline      TEXT,
-                    ai_summary    TEXT,
-                    stocks        TEXT,
-                    article_count INTEGER,
-                    source_list   TEXT
+                    hour           TEXT PRIMARY KEY,
+                    sector         TEXT,
+                    headline       TEXT,
+                    ai_summary     TEXT,
+                    stocks         TEXT,
+                    article_count  INTEGER,
+                    source_list    TEXT,
+                    impact_score   INTEGER DEFAULT 0,
+                    is_evolution   INTEGER DEFAULT 0,
+                    evolution_type TEXT DEFAULT ''
                 );
                 CREATE TABLE IF NOT EXISTS listed_stocks (
                     stock_code TEXT PRIMARY KEY,
@@ -68,27 +71,93 @@ class SQLiteStore:
                     updated_at TEXT
                 );
                 CREATE TABLE IF NOT EXISTS analysis_traces (
-                    id                   INTEGER PRIMARY KEY AUTOINCREMENT,
-                    hour                 TEXT NOT NULL,
-                    created_at           TEXT,
-                    input_article_count  INTEGER DEFAULT 0,
-                    input_articles       TEXT,   -- JSON [{source, title}]
-                    step1_issue          TEXT,
-                    step1_filtered_count INTEGER DEFAULT 0,
-                    similarity_checked   INTEGER DEFAULT 0,
-                    compared_headlines   TEXT,   -- JSON [str]
-                    is_duplicate         INTEGER DEFAULT 0,
-                    similar_to           TEXT,
-                    similarity_reason    TEXT,
-                    retry_count          INTEGER DEFAULT 0,
-                    issue_after_dedup    TEXT,
-                    review_approved      INTEGER DEFAULT 1,
-                    review_feedback      TEXT,
-                    issue_after_review   TEXT,
-                    final_headline       TEXT,
-                    final_sector         TEXT
+                    id                        INTEGER PRIMARY KEY AUTOINCREMENT,
+                    hour                      TEXT NOT NULL,
+                    created_at                TEXT,
+                    input_article_count       INTEGER DEFAULT 0,
+                    input_articles            TEXT,   -- JSON [{source, title}]
+                    step1_issue               TEXT,
+                    step1_filtered_count      INTEGER DEFAULT 0,
+                    -- Step 0
+                    step0_removed_count       INTEGER DEFAULT 0,
+                    step0_removal_reasons     TEXT,   -- JSON [str]
+                    -- Step 1b
+                    similarity_checked        INTEGER DEFAULT 0,
+                    compared_headlines        TEXT,   -- JSON [str]
+                    is_duplicate              INTEGER DEFAULT 0,
+                    similar_to                TEXT,
+                    similarity_reason         TEXT,
+                    retry_count               INTEGER DEFAULT 0,
+                    issue_after_dedup         TEXT,
+                    is_evolution              INTEGER DEFAULT 0,
+                    evolution_of              TEXT,
+                    evolution_type            TEXT,
+                    -- Step 1c
+                    review_approved           INTEGER DEFAULT 1,
+                    review_feedback           TEXT,
+                    issue_after_review        TEXT,
+                    -- Step 2
+                    final_headline            TEXT,
+                    final_sector              TEXT,
+                    -- Step 2b
+                    factcheck_passed          INTEGER DEFAULT 1,
+                    factcheck_corrections     TEXT,   -- JSON [str]
+                    headline_before_factcheck TEXT,
+                    -- Step 2c
+                    summary_quality_passed    INTEGER DEFAULT 1,
+                    summary_regenerated       INTEGER DEFAULT 0,
+                    summary_quality_feedback  TEXT,
+                    -- Scoring
+                    impact_score              INTEGER DEFAULT 0,
+                    impact_score_reason       TEXT,
+                    -- 스킵
+                    skipped                   INTEGER DEFAULT 0,
+                    no_issue_reason           TEXT
+                );
+                CREATE TABLE IF NOT EXISTS daily_summaries (
+                    date         TEXT PRIMARY KEY,
+                    created_at   TEXT,
+                    top_issues   TEXT,   -- JSON
+                    market_flow  TEXT,
+                    hot_sectors  TEXT,   -- JSON [str]
+                    hot_stocks   TEXT    -- JSON [{name, code, mention_count}]
                 );
             """)
+
+            # 기존 DB 호환: timeline_issues 새 컬럼 추가
+            for col, definition in [
+                ("impact_score",   "INTEGER DEFAULT 0"),
+                ("is_evolution",   "INTEGER DEFAULT 0"),
+                ("evolution_type", "TEXT DEFAULT ''"),
+            ]:
+                try:
+                    conn.execute(f"ALTER TABLE timeline_issues ADD COLUMN {col} {definition}")
+                except Exception:
+                    pass  # 이미 존재하면 무시
+
+            # 기존 DB 호환: analysis_traces 새 컬럼 추가
+            for col, definition in [
+                ("step0_removed_count",       "INTEGER DEFAULT 0"),
+                ("step0_removal_reasons",     "TEXT"),
+                ("is_evolution",              "INTEGER DEFAULT 0"),
+                ("evolution_of",              "TEXT"),
+                ("evolution_type",            "TEXT"),
+                ("factcheck_passed",          "INTEGER DEFAULT 1"),
+                ("factcheck_corrections",     "TEXT"),
+                ("headline_before_factcheck", "TEXT"),
+                ("summary_quality_passed",    "INTEGER DEFAULT 1"),
+                ("summary_regenerated",       "INTEGER DEFAULT 0"),
+                ("summary_quality_feedback",  "TEXT"),
+                ("impact_score",              "INTEGER DEFAULT 0"),
+                ("impact_score_reason",       "TEXT"),
+                ("skipped",                   "INTEGER DEFAULT 0"),
+                ("no_issue_reason",           "TEXT"),
+            ]:
+                try:
+                    conn.execute(f"ALTER TABLE analysis_traces ADD COLUMN {col} {definition}")
+                except Exception:
+                    pass  # 이미 존재하면 무시
+
         self._log.info(f"SQLite DB 초기화 완료: {self._path}")
 
     def _conn(self) -> sqlite3.Connection:
@@ -122,14 +191,18 @@ class SQLiteStore:
             return 0
         sql = """
             INSERT OR REPLACE INTO timeline_issues
-                (hour, sector, headline, ai_summary, stocks, article_count, source_list)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+                (hour, sector, headline, ai_summary, stocks, article_count, source_list,
+                 impact_score, is_evolution, evolution_type)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """
         rows = [
             (
                 r.hour, r.sector, r.headline, r.ai_summary,
                 json.dumps(r.stocks_as_dicts(), ensure_ascii=False),
                 r.article_count, r.source_list,
+                r.impact_score,
+                int(r.is_evolution),
+                r.evolution_type,
             )
             for r in results
         ]
@@ -196,6 +269,9 @@ class SQLiteStore:
                 related_stocks=stocks,
                 article_count=r["article_count"] or 0,
                 source_list=r["source_list"] or "",
+                impact_score=r["impact_score"] if r["impact_score"] is not None else 0,
+                is_evolution=bool(r["is_evolution"]) if r["is_evolution"] is not None else False,
+                evolution_type=r["evolution_type"] or "",
             ))
         return results
 
@@ -220,12 +296,21 @@ class SQLiteStore:
                 hour, created_at,
                 input_article_count, input_articles,
                 step1_issue, step1_filtered_count,
+                step0_removed_count, step0_removal_reasons,
                 similarity_checked, compared_headlines,
                 is_duplicate, similar_to, similarity_reason,
                 retry_count, issue_after_dedup,
+                is_evolution, evolution_of, evolution_type,
                 review_approved, review_feedback, issue_after_review,
-                final_headline, final_sector
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                final_headline, final_sector,
+                factcheck_passed, factcheck_corrections, headline_before_factcheck,
+                summary_quality_passed, summary_regenerated, summary_quality_feedback,
+                impact_score, impact_score_reason,
+                skipped, no_issue_reason
+            ) VALUES (
+                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+            )
         """
         rows = [
             (
@@ -233,12 +318,23 @@ class SQLiteStore:
                 t.input_article_count,
                 json.dumps(t.input_articles, ensure_ascii=False),
                 t.step1_issue, t.step1_filtered_count,
+                t.step0_removed_count,
+                json.dumps(t.step0_removal_reasons, ensure_ascii=False),
                 int(t.similarity_checked),
                 json.dumps(t.compared_headlines, ensure_ascii=False),
                 int(t.is_duplicate), t.similar_to, t.similarity_reason,
                 t.retry_count, t.issue_after_dedup,
+                int(t.is_evolution), t.evolution_of, t.evolution_type,
                 int(t.review_approved), t.review_feedback, t.issue_after_review,
                 t.final_headline, t.final_sector,
+                int(t.factcheck_passed),
+                json.dumps(t.factcheck_corrections, ensure_ascii=False),
+                t.headline_before_factcheck,
+                int(t.summary_quality_passed),
+                int(t.summary_regenerated),
+                t.summary_quality_feedback,
+                t.impact_score, t.impact_score_reason,
+                int(t.skipped), t.no_issue_reason,
             )
             for t in traces
         ]
@@ -252,6 +348,14 @@ class SQLiteStore:
         sql    = "SELECT * FROM analysis_traces WHERE hour >= ? ORDER BY created_at DESC"
         with self._conn() as conn:
             rows = conn.execute(sql, (cutoff,)).fetchall()
+
+        def _col(r, col, default=None):
+            """Row에서 컬럼을 안전하게 읽습니다 (구버전 DB 호환)."""
+            try:
+                return r[col]
+            except (IndexError, KeyError):
+                return default
+
         return [
             AnalysisTrace(
                 hour=r["hour"],
@@ -260,6 +364,8 @@ class SQLiteStore:
                 input_articles=json.loads(r["input_articles"] or "[]"),
                 step1_issue=r["step1_issue"] or "",
                 step1_filtered_count=r["step1_filtered_count"] or 0,
+                step0_removed_count=_col(r, "step0_removed_count", 0) or 0,
+                step0_removal_reasons=json.loads(_col(r, "step0_removal_reasons") or "[]"),
                 similarity_checked=bool(r["similarity_checked"]),
                 compared_headlines=json.loads(r["compared_headlines"] or "[]"),
                 is_duplicate=bool(r["is_duplicate"]),
@@ -267,11 +373,60 @@ class SQLiteStore:
                 similarity_reason=r["similarity_reason"] or "",
                 retry_count=r["retry_count"] or 0,
                 issue_after_dedup=r["issue_after_dedup"] or "",
+                is_evolution=bool(_col(r, "is_evolution", 0)),
+                evolution_of=_col(r, "evolution_of") or "",
+                evolution_type=_col(r, "evolution_type") or "",
                 review_approved=bool(r["review_approved"]),
                 review_feedback=r["review_feedback"] or "",
                 issue_after_review=r["issue_after_review"] or "",
                 final_headline=r["final_headline"] or "",
                 final_sector=r["final_sector"] or "",
+                factcheck_passed=bool(_col(r, "factcheck_passed", 1)),
+                factcheck_corrections=json.loads(_col(r, "factcheck_corrections") or "[]"),
+                headline_before_factcheck=_col(r, "headline_before_factcheck") or "",
+                summary_quality_passed=bool(_col(r, "summary_quality_passed", 1)),
+                summary_regenerated=bool(_col(r, "summary_regenerated", 0)),
+                summary_quality_feedback=_col(r, "summary_quality_feedback") or "",
+                impact_score=_col(r, "impact_score", 0) or 0,
+                impact_score_reason=_col(r, "impact_score_reason") or "",
+                skipped=bool(_col(r, "skipped", 0)),
+                no_issue_reason=_col(r, "no_issue_reason") or "",
             )
             for r in rows
         ]
+
+    def save_daily_summary(self, summary: DailySummary) -> bool:
+        """일일 브리핑 요약을 daily_summaries 테이블에 upsert합니다."""
+        sql = """
+            INSERT OR REPLACE INTO daily_summaries
+                (date, created_at, top_issues, market_flow, hot_sectors, hot_stocks)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """
+        row = (
+            summary.date,
+            summary.created_at,
+            json.dumps(summary.top_issues, ensure_ascii=False),
+            summary.market_flow,
+            json.dumps(summary.hot_sectors, ensure_ascii=False),
+            json.dumps(summary.hot_stocks, ensure_ascii=False),
+        )
+        with self._conn() as conn:
+            conn.execute(sql, row)
+        self._log.info(f"daily_summary 저장: {summary.date}")
+        return True
+
+    def get_daily_summary(self, date: str) -> DailySummary | None:
+        """특정 날짜(YYYY-MM-DD)의 일일 브리핑 요약을 반환합니다. 없으면 None."""
+        sql = "SELECT * FROM daily_summaries WHERE date = ? LIMIT 1"
+        with self._conn() as conn:
+            row = conn.execute(sql, (date,)).fetchone()
+        if not row:
+            return None
+        return DailySummary(
+            date=row["date"],
+            created_at=row["created_at"] or "",
+            top_issues=json.loads(row["top_issues"] or "[]"),
+            market_flow=row["market_flow"] or "",
+            hot_sectors=json.loads(row["hot_sectors"] or "[]"),
+            hot_stocks=json.loads(row["hot_stocks"] or "[]"),
+        )

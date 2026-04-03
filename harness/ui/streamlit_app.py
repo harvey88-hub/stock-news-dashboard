@@ -156,6 +156,11 @@ st.markdown("""
     padding: 1px 6px; border-radius: 4px;
     background: rgba(167,139,250,0.15); color: #a78bfa; border: 1px solid rgba(167,139,250,0.3);
 }
+.badge-skip {
+    display: inline-block; font-size: 10px; font-weight: 700;
+    padding: 1px 6px; border-radius: 4px;
+    background: rgba(148,163,184,0.15); color: #94a3b8; border: 1px solid rgba(148,163,184,0.3);
+}
 .trace-articles {
     background: #0d0f1a; border: 1px solid #1a1f33; border-radius: 8px;
     padding: 8px 10px; margin-top: 6px; font-size: 11px; color: #4a5168;
@@ -281,31 +286,37 @@ with tab_trace:
         """, unsafe_allow_html=True)
     else:
         # ── 요약 지표 ────────────────────────────
-        total      = len(traces)
-        dup_count  = sum(1 for t in traces if t.is_duplicate)
-        edit_count = sum(1 for t in traces if not t.review_approved)
-        retry_total = sum(t.retry_count for t in traces)
+        total        = len(traces)
+        skip_count   = sum(1 for t in traces if t.skipped)
+        dup_count    = sum(1 for t in traces if t.is_duplicate)
+        edit_count   = sum(1 for t in traces if not t.review_approved and not t.skipped)
+        retry_total  = sum(t.retry_count for t in traces)
 
-        m1, m2, m3, m4 = st.columns(4)
+        m1, m2, m3, m4, m5 = st.columns(5)
         m1.metric("분석 시간대", total)
-        m2.metric("중복 감지", dup_count, help="유사 이슈로 판정되어 재선정된 횟수")
-        m3.metric("이슈 수정", edit_count, help="검토 Agent가 이슈를 수정한 횟수")
-        m4.metric("총 재선정", retry_total, help="유사도 검사로 재시도된 총 횟수")
+        m2.metric("이슈 없음", skip_count, help="AI가 주요 이슈 없음으로 판단한 시간대")
+        m3.metric("중복 감지", dup_count, help="유사 이슈로 판정되어 재선정된 횟수")
+        m4.metric("이슈 수정", edit_count, help="검토 Agent가 이슈를 수정한 횟수")
+        m5.metric("총 재선정", retry_total, help="유사도 검사로 재시도된 총 횟수")
 
         st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
 
         # ── 필터 ─────────────────────────────────
-        filter_col1, filter_col2 = st.columns(2)
+        filter_col1, filter_col2, filter_col3 = st.columns(3)
         with filter_col1:
-            show_only_dup = st.checkbox("중복 감지된 것만", value=False)
+            show_only_skip = st.checkbox("이슈 없음만", value=False)
         with filter_col2:
+            show_only_dup = st.checkbox("중복 감지된 것만", value=False)
+        with filter_col3:
             show_only_edit = st.checkbox("이슈 수정된 것만", value=False)
 
         filtered = traces
+        if show_only_skip:
+            filtered = [t for t in filtered if t.skipped]
         if show_only_dup:
             filtered = [t for t in filtered if t.is_duplicate]
         if show_only_edit:
-            filtered = [t for t in filtered if not t.review_approved]
+            filtered = [t for t in filtered if not t.review_approved and not t.skipped]
 
         st.markdown(
             f'<div style="font-size:11px;color:#4a5168;margin-bottom:8px;">'
@@ -315,14 +326,57 @@ with tab_trace:
 
         # ── 트레이스 카드 ─────────────────────────
         for trace in filtered:
-            # 카드 헤더: 중복/수정 여부 배지
+            # 카드 헤더: 이슈없음/중복/수정 여부 배지
             badges = ""
+            if trace.skipped:
+                badges += '<span class="badge-skip">— 이슈 없음</span> '
             if trace.is_duplicate:
                 badges += '<span class="badge-warn">⚠ 중복 감지</span> '
-            if not trace.review_approved:
+            if not trace.review_approved and not trace.skipped:
                 badges += '<span class="badge-edit">✎ 이슈 수정</span> '
             if not badges:
                 badges = '<span class="badge-ok">✓ 정상</span>'
+
+            # 입력 기사 목록 (접기)
+            articles_rows = "".join(
+                f'<div class="trace-article-row">'
+                f'<span class="trace-article-src">[{a.get("source","")}]</span>'
+                f'{a.get("title","")}'
+                f'</div>'
+                for a in trace.input_articles[:20]
+            )
+            articles_block = (
+                f'<div class="trace-articles">{articles_rows}</div>'
+                if articles_rows else ""
+            )
+
+            # 주요 이슈 없음 케이스: 간략 카드
+            if trace.skipped:
+                s1_html = (
+                    f'<span class="badge-skip">이슈 없음</span> '
+                    f'<span style="color:#e0a060;font-weight:500;">{trace.no_issue_reason or "AI 판단: 주요 이슈 없음"}</span>'
+                    f'<br><span style="color:#4a5168">입력 기사 {trace.input_article_count}건 검토</span>'
+                )
+                st.markdown(f"""
+                <div class="trace-card">
+                    <div class="trace-hour">
+                        {trace.hour}
+                        <span style="font-weight:400;color:#4a5168;font-size:11px;margin-left:8px;">
+                            분석: {trace.created_at}
+                        </span>
+                        <span style="float:right">{badges}</span>
+                    </div>
+                    <div class="trace-step">
+                        <span class="step-label step-s1">Step 1</span>
+                        <div class="step-content">
+                            <span style="color:#4a5168">이슈 선정</span><br>
+                            {s1_html}
+                            {articles_block}
+                        </div>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+                continue
 
             # Step 1: 이슈 선정
             s1_html = (
@@ -367,19 +421,6 @@ with tab_trace:
             s2_html = (
                 f'<span style="color:#60a5fa;font-size:11px;">[{trace.final_sector}]</span> '
                 f'<span class="step-issue">{trace.final_headline}</span>'
-            )
-
-            # 입력 기사 목록 (접기)
-            articles_rows = "".join(
-                f'<div class="trace-article-row">'
-                f'<span class="trace-article-src">[{a.get("source","")}]</span>'
-                f'{a.get("title","")}'
-                f'</div>'
-                for a in trace.input_articles[:20]
-            )
-            articles_block = (
-                f'<div class="trace-articles">{articles_rows}</div>'
-                if articles_rows else ""
             )
 
             st.markdown(f"""

@@ -84,7 +84,9 @@ class RssCollector:
         )
 
         if failed_sources:
-            raise CollectorPartialError(failed_sources)  # 경고지만 파이프라인은 계속 진행
+            err = CollectorPartialError(failed_sources)
+            err._articles = dedup  # 수집된 기사를 예외에 담아 파이프라인이 활용할 수 있도록
+            raise err
 
         return dedup
 

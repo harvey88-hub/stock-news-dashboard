@@ -52,9 +52,23 @@ class AnalysisResult:
     related_stocks: list[StockMatch] = field(default_factory=list)
     article_count: int = 0
     source_list: str = ""
+    impact_score: int = 0           # 이슈 임팩트 점수 0~10
+    is_evolution: bool = False       # 기존 이슈의 발전(후속/갱신/반전) 여부
+    evolution_type: str = ""         # "update" | "reversal" | "followup" | ""
 
     def stocks_as_dicts(self) -> list[dict]:
         return [{"name": s.name, "reason": s.reason, "source": s.source} for s in self.related_stocks]
+
+
+@dataclass
+class DailySummary:
+    """일일 브리핑 요약 — 하루치 분석 결과를 종합한 모델"""
+    date: str                                    # "YYYY-MM-DD"
+    created_at: str                              # KST 문자열
+    top_issues: list[dict] = field(default_factory=list)    # [{"headline": str, "sector": str, "impact_score": int}]
+    market_flow: str = ""                        # 하루 흐름 요약 3줄
+    hot_sectors: list[str] = field(default_factory=list)    # 주목 섹터 최대 3개
+    hot_stocks: list[dict] = field(default_factory=list)    # [{"name": str, "code": str, "mention_count": int}]
 
 
 @dataclass
@@ -79,6 +93,10 @@ class AnalysisTrace:
     step1_issue: str = ""
     step1_filtered_count: int = 0
 
+    # Step 0 : 사전 필터링 (Haiku)
+    step0_removed_count: int = 0                                # 필터링으로 제거된 기사 수
+    step0_removal_reasons: list[str] = field(default_factory=list)  # 제거 사유 목록
+
     # Step 1b : 유사도 검사 (Haiku)
     similarity_checked: bool = False
     compared_headlines: list[str] = field(default_factory=list) # 비교 대상 헤드라인
@@ -87,6 +105,9 @@ class AnalysisTrace:
     similarity_reason: str = ""
     retry_count: int = 0                                        # 재선정 횟수
     issue_after_dedup: str = ""                                 # 유사도 통과 후 이슈
+    is_evolution: bool = False                                  # 발전 이슈 여부
+    evolution_of: str = ""                                      # 발전 대상 기존 헤드라인
+    evolution_type: str = ""                                    # "update" | "reversal" | "followup"
 
     # Step 1c : 검토 Agent (Haiku)
     review_approved: bool = True
@@ -96,6 +117,24 @@ class AnalysisTrace:
     # Step 2 : 심층 분석 결과 (Sonnet)
     final_headline: str = ""
     final_sector: str = ""
+
+    # Step 2b : 팩트체크 (Haiku)
+    factcheck_passed: bool = True
+    factcheck_corrections: list[str] = field(default_factory=list)  # 수정된 항목 목록
+    headline_before_factcheck: str = ""
+
+    # Step 2c : ai_summary 품질 검토 (Haiku)
+    summary_quality_passed: bool = True
+    summary_regenerated: bool = False
+    summary_quality_feedback: str = ""
+
+    # 이슈 중요도 스코어링 (Haiku)
+    impact_score: int = 0
+    impact_score_reason: str = ""
+
+    # 주요 이슈 없음
+    skipped: bool = False          # True이면 이슈 없음으로 Step 2 없이 종료
+    no_issue_reason: str = ""      # AI가 판단한 이슈 없음 사유
 
 
 # ──────────────────────────────────────────
@@ -164,4 +203,12 @@ class Store(Protocol):
 
     def get_traces(self, hours_back: int = 24) -> list[AnalysisTrace]:
         """최근 N시간 이내 분석 추적 로그를 반환한다."""
+        ...
+
+    def save_daily_summary(self, summary: DailySummary) -> bool:
+        """일일 브리핑 요약을 저장하고 성공 여부를 반환한다."""
+        ...
+
+    def get_daily_summary(self, date: str) -> DailySummary | None:
+        """특정 날짜(YYYY-MM-DD)의 일일 브리핑 요약을 반환한다. 없으면 None."""
         ...

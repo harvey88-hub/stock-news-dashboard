@@ -85,6 +85,12 @@ class StockMatcher:
                     if not stock.code and stock.name in listed_stocks:
                         stock.code = listed_stocks[stock.name]
 
+                # 종목 관련성 검증 Agent — 관련성 낮은 종목 제거
+                if verified and self._claude:
+                    verified = self._relevance_check_agent(
+                        result.headline, verified, result.sector
+                    )
+
                 result.related_stocks = verified
                 after = [s.name for s in verified]
                 self._log.info(f"  {result.hour} 종목 검증: {before} → {after}")
@@ -234,6 +240,84 @@ class StockMatcher:
         except Exception as e:
             self._log.warning(f"이슈 종목 탐색 Agent 오류: {e}")
             return []
+
+    def _relevance_check_agent(
+        self,
+        headline: str,
+        stocks: list[StockMatch],
+        sector: str,
+    ) -> list[StockMatch]:
+        """Haiku로 DB 매칭 통과 종목들의 실제 이슈 관련성을 재검토합니다.
+
+        관련성 점수 5 미만인 종목을 제거합니다.
+
+        Returns:
+            관련성 낮은 종목이 제거된 StockMatch 목록
+        """
+        if not self._claude or not stocks:
+            return stocks
+
+        stocks_info = [{"name": s.name, "reason": s.reason, "source": s.source} for s in stocks]
+        prompt = f"""아래 이슈와 각 종목의 관련성을 0~10점으로 평가해주세요.
+
+이슈: {headline}
+섹터: {sector}
+
+종목 목록:
+{json.dumps(stocks_info, ensure_ascii=False, indent=2)}
+
+평가 기준:
+- 10: 이슈의 직접 당사자 기업
+- 8~9: 이슈에서 직접 언급된 기업 또는 공급망 핵심 업체
+- 5~7: 이슈 섹터의 대표 종목으로 간접 영향
+- 0~4: 이슈와 관련성이 낮거나 근거 없음
+
+반드시 JSON 배열로만 응답:
+[
+  {{"name": "종목명", "score": 점수(0~10), "keep": true/false}},
+  ...
+]
+(score >= 5 이면 keep: true, score < 5 이면 keep: false)"""
+
+        try:
+            msg = self._claude.messages.create(
+                model=self._haiku_model,
+                max_tokens=400,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            text = msg.content[0].text.strip()
+            if "```" in text:
+                parts = text.split("```")
+                text  = parts[1] if len(parts) > 1 else text
+                if text.lower().startswith("json"):
+                    text = text[4:]
+            if "[" in text:
+                text = text[text.index("["):text.rindex("]") + 1]
+
+            evaluations: dict[str, bool] = {}
+            for item in json.loads(text):
+                if not isinstance(item, dict):
+                    continue
+                name = item.get("name", "").strip()
+                keep = bool(item.get("keep", True))
+                score = item.get("score", 5)
+                if name:
+                    evaluations[name] = keep
+                    if not keep:
+                        self._log.info(
+                            f"  관련성 낮음 제거: {name} (점수 {score})"
+                        )
+
+            # 관련성 낮은 종목 제거 (평가 결과가 없으면 유지)
+            filtered = [s for s in stocks if evaluations.get(s.name, True)]
+            removed = len(stocks) - len(filtered)
+            if removed:
+                self._log.info(f"  관련성 검증 후 {removed}개 종목 제거 (총 {len(filtered)}개 유지)")
+            return filtered
+
+        except Exception as e:
+            self._log.warning(f"  관련성 검증 Agent 오류: {e} → 원본 종목 유지")
+            return stocks
 
     def _ai_fallback(self, stocks: list[StockMatch]) -> list[StockMatch]:
         """DB 매칭 실패한 종목을 Haiku로 처리합니다."""
