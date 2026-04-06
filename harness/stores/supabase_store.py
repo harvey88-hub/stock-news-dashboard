@@ -273,6 +273,7 @@ class SupabaseStore:
                 "impact_score_reason":        t.impact_score_reason,
                 "skipped":                    t.skipped,
                 "no_issue_reason":            t.no_issue_reason,
+                "step1_key_articles":         t.step1_key_articles,
             }
             for t in traces
         ]
@@ -330,6 +331,7 @@ class SupabaseStore:
                     impact_score_reason=r.get("impact_score_reason", "") or "",
                     skipped=bool(r.get("skipped", False)),
                     no_issue_reason=r.get("no_issue_reason", ""),
+                    step1_key_articles=r.get("step1_key_articles") or [],
                 )
                 for r in (result.data or [])
             ]

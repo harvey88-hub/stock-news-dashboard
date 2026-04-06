@@ -120,7 +120,8 @@ class ClaudeAnalyzer:
 
             # Step 0: 기사 사전 필터링 (Haiku)
             self._log.info("    [Step0] 기사 사전 필터링 중...")
-            articles, removed_count = self._step0_filter_articles(hour, articles)
+            articles_before_filter = articles[:]
+            articles, removed_count, removal_reasons = self._step0_filter_articles(hour, articles)
 
             # Step 1: 핵심 이슈 선정 + 관련 기사 추출 (Haiku)
             self._log.info("    [Step1] 핵심 이슈 선정 중...")
@@ -129,13 +130,15 @@ class ClaudeAnalyzer:
             trace = AnalysisTrace(
                 hour=hour,
                 created_at=now_kst,
-                input_article_count=len(articles),
-                input_articles=[{"source": a.source, "title": a.title} for a in articles[:30]],
+                input_article_count=len(articles_before_filter),
+                input_articles=[{"source": a.source, "title": a.title} for a in articles_before_filter[:30]],
+                step0_removed_count=removed_count,
+                step0_removal_reasons=removal_reasons,
                 step1_issue=issue_text,
                 step1_filtered_count=len(key_articles),
+                step1_key_articles=[{"source": a.source, "title": a.title} for a in key_articles],
                 issue_after_dedup=issue_text,
                 issue_after_review=issue_text,
-                step0_removed_count=removed_count,
             )
 
             # 주요 이슈가 없는 경우: trace에 사유 기록 후 조기 종료
@@ -273,6 +276,17 @@ class ClaudeAnalyzer:
                 self._traces.append(trace)
             return None
 
+    def record_no_articles(self, hour: str):
+        """뉴스 수집 0건인 경우 history에 기록할 trace를 생성합니다."""
+        trace = AnalysisTrace(
+            hour=hour,
+            created_at=datetime.now(_KST).strftime("%Y-%m-%d %H:%M:%S"),
+            input_article_count=0,
+            skipped=True,
+            no_issue_reason="뉴스 수집: 0건",
+        )
+        self._traces.append(trace)
+
     def flush_traces(self) -> list[AnalysisTrace]:
         """수집된 추적 로그를 반환하고 내부 버퍼를 비웁니다."""
         traces, self._traces = self._traces, []
@@ -335,8 +349,8 @@ class ClaudeAnalyzer:
             )
             filtered = [a for i, a in enumerate(articles) if i not in remove_indices]
             removed_count = len(remove_indices)
+            reasons = res.get("reasons", [])
             if removed_count:
-                reasons = res.get("reasons", [])
                 self._log.info(
                     f"      Step0 필터링: {removed_count}건 제거 "
                     f"({len(filtered)}건 남음)"
@@ -345,10 +359,10 @@ class ClaudeAnalyzer:
                     self._log.info(f"        - {r}")
             else:
                 self._log.info(f"      Step0 필터링: 제거 없음 ({len(filtered)}건 유지)")
-            return filtered, removed_count
+            return filtered, removed_count, reasons
         except Exception as e:
             self._log.warning(f"      Step0 필터링 오류: {e} → 원본 기사 유지")
-            return articles, 0
+            return articles, 0, []
 
     def _step1_find_key_issue(
         self,

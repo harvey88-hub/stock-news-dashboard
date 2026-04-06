@@ -112,7 +112,9 @@ class SQLiteStore:
                     impact_score_reason       TEXT,
                     -- 스킵
                     skipped                   INTEGER DEFAULT 0,
-                    no_issue_reason           TEXT
+                    no_issue_reason           TEXT,
+                    -- Step 1 관련 기사
+                    step1_key_articles        TEXT    -- JSON [{source, title}]
                 );
                 CREATE TABLE IF NOT EXISTS daily_summaries (
                     date         TEXT PRIMARY KEY,
@@ -152,6 +154,7 @@ class SQLiteStore:
                 ("impact_score_reason",       "TEXT"),
                 ("skipped",                   "INTEGER DEFAULT 0"),
                 ("no_issue_reason",           "TEXT"),
+                ("step1_key_articles",        "TEXT"),
             ]:
                 try:
                     conn.execute(f"ALTER TABLE analysis_traces ADD COLUMN {col} {definition}")
@@ -306,10 +309,11 @@ class SQLiteStore:
                 factcheck_passed, factcheck_corrections, headline_before_factcheck,
                 summary_quality_passed, summary_regenerated, summary_quality_feedback,
                 impact_score, impact_score_reason,
-                skipped, no_issue_reason
+                skipped, no_issue_reason,
+                step1_key_articles
             ) VALUES (
                 ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
             )
         """
         rows = [
@@ -335,6 +339,7 @@ class SQLiteStore:
                 t.summary_quality_feedback,
                 t.impact_score, t.impact_score_reason,
                 int(t.skipped), t.no_issue_reason,
+                json.dumps(t.step1_key_articles, ensure_ascii=False),
             )
             for t in traces
         ]
@@ -391,6 +396,7 @@ class SQLiteStore:
                 impact_score_reason=_col(r, "impact_score_reason") or "",
                 skipped=bool(_col(r, "skipped", 0)),
                 no_issue_reason=_col(r, "no_issue_reason") or "",
+                step1_key_articles=json.loads(_col(r, "step1_key_articles") or "[]"),
             )
             for r in rows
         ]

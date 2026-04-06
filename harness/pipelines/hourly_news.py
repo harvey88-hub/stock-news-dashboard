@@ -15,8 +15,11 @@ pipelines/hourly_news.py
 """
 
 from __future__ import annotations
+from datetime import datetime, timezone, timedelta
 from core.logging import PipelineLogger
 from core.errors import CollectorPartialError
+
+_KST = timezone(timedelta(hours=9))
 
 
 class HourlyNewsPipeline:
@@ -79,6 +82,15 @@ class HourlyNewsPipeline:
 
         if not articles:
             log.warn("분석할 기사가 없습니다.")
+            # 0건 수집 기록: history에서 확인 가능하도록 trace 생성
+            current_hour = datetime.now(_KST).strftime("%Y-%m-%d %H:00")
+            self._claude.record_no_articles(current_hour)
+            traces = self._claude.flush_traces()
+            if traces and not dry_run:
+                try:
+                    self._store.save_traces(traces)
+                except Exception as e:
+                    log.warn(f"0건 수집 추적 로그 저장 실패: {e}")
             return summary
 
         # ── Step 2: 기사 저장 ─────────────────────────────

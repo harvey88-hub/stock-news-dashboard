@@ -87,15 +87,16 @@ class AnalysisTrace:
     hour: str
     created_at: str
 
-    # Step 1 : 이슈 선정 (Haiku)
-    input_article_count: int = 0
-    input_articles: list[dict] = field(default_factory=list)    # [{source, title}]
-    step1_issue: str = ""
-    step1_filtered_count: int = 0
-
     # Step 0 : 사전 필터링 (Haiku)
+    input_article_count: int = 0
+    input_articles: list[dict] = field(default_factory=list)    # [{source, title}] — step0 전 전체
     step0_removed_count: int = 0                                # 필터링으로 제거된 기사 수
     step0_removal_reasons: list[str] = field(default_factory=list)  # 제거 사유 목록
+
+    # Step 1 : 이슈 선정 (Haiku)
+    step1_issue: str = ""
+    step1_filtered_count: int = 0
+    step1_key_articles: list[dict] = field(default_factory=list)  # 선정된 관련 기사 [{source, title}]
 
     # Step 1b : 유사도 검사 (Haiku)
     similarity_checked: bool = False
