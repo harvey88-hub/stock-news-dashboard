@@ -300,6 +300,9 @@ header                         { display: none !important; }
 .badge-skip { display:inline-block; font-size:10px; font-weight:700; padding:1px 6px;
                border-radius:4px; background:rgba(148,163,184,0.15); color:#94a3b8;
                border:1px solid rgba(148,163,184,0.3); }
+.badge-zero { display:inline-block; font-size:10px; font-weight:700; padding:1px 6px;
+               border-radius:4px; background:rgba(239,68,68,0.15); color:#f87171;
+               border:1px solid rgba(239,68,68,0.3); }
 .trace-articles {
     background: #0d0f1a; border: 1px solid #1a1f33; border-radius: 8px;
     padding: 8px 10px; margin-top: 6px; font-size: 11px; color: #4a5168;
@@ -307,6 +310,14 @@ header                         { display: none !important; }
 }
 .trace-art-row { padding: 2px 0; }
 .trace-art-src { color: #4f9cf9; font-weight: 600; margin-right: 4px; }
+.diff-box {
+    background: #0d0f1a; border: 1px solid #1a1f33; border-radius: 8px;
+    padding: 7px 10px; margin-top: 5px; font-size: 11px; line-height: 1.6;
+}
+.diff-before { color: #6b7280; text-decoration: line-through; }
+.diff-after  { color: #34d399; }
+.filter-reason { color: #fb923c; font-size: 11px; padding: 1px 0; }
+.filter-reason::before { content: "✕ "; color: #ef4444; }
 
 /* ══════════════════════════════════════
    모바일 최적화 (≤ 640px)
@@ -400,9 +411,9 @@ def load_issues() -> dict:
 
 
 @st.cache_data(ttl=300)
-def load_traces(hours_back: int = 24) -> list:
+def load_traces() -> list:
     client = get_supabase()
-    cutoff = (datetime.now(KST) - timedelta(hours=hours_back)).strftime("%Y-%m-%d %H:%M")
+    cutoff = (datetime.now(KST) - timedelta(hours=48)).strftime("%Y-%m-%d %H:%M")
     try:
         result = (
             client.table("analysis_traces")
@@ -564,7 +575,7 @@ st.markdown(
 # 탭
 # ─────────────────────────────────────────────
 
-tab_timeline, tab_trace = st.tabs(["📈 타임라인", "🔍 AI 판단 추적"])
+tab_timeline, tab_trace = st.tabs(["📈 타임라인", "📋 history"])
 
 # ══════════════════════════════════════════════
 # 탭 1: 타임라인
@@ -703,16 +714,6 @@ with tab_timeline:
                 unsafe_allow_html=True,
             )
 
-            with st.expander(f"📋 {hour_label} 기사 목록 ({len(articles)}건)"):
-                for art in articles:
-                    st.markdown(
-                        f'<div style="padding:6px 0;border-bottom:1px solid #1e2130;">'
-                        f'<span class="art-source">[{art.get("source","")}]</span> '
-                        f'<a href="{art.get("link","#")}" target="_blank" class="art-link">{art.get("title","")}</a>'
-                        f'</div>',
-                        unsafe_allow_html=True,
-                    )
-
         elif len(articles) > 0:
             st.markdown(
                 f"""
@@ -748,42 +749,19 @@ with tab_timeline:
                 st.cache_data.clear()
                 st.rerun()
 
-            with st.expander(f"📋 {hour_label} 기사 목록 ({len(articles)}건)"):
-                for art in articles:
-                    st.markdown(
-                        f'<div style="padding:6px 0;border-bottom:1px solid #1e2130;">'
-                        f'<span class="art-source">[{art.get("source","")}]</span> '
-                        f'<a href="{art.get("link","#")}" target="_blank" class="art-link">{art.get("title","")}</a>'
-                        f'</div>',
-                        unsafe_allow_html=True,
-                    )
-
     st.markdown("<br><br>", unsafe_allow_html=True)
 
 # ══════════════════════════════════════════════
-# 탭 2: AI 판단 추적
+# 탭 2: history
 # ══════════════════════════════════════════════
 
 with tab_trace:
-    col_range, col_refresh = st.columns([3, 1])
-    with col_range:
-        hours_back = st.select_slider(
-            "조회 범위",
-            options=[6, 12, 24, 48, 72],
-            value=24,
-            format_func=lambda h: f"최근 {h}시간",
-            label_visibility="collapsed",
-        )
-    with col_refresh:
-        if st.button("새로고침", use_container_width=True):
-            st.cache_data.clear()
-
-    traces = load_traces(hours_back=hours_back)
+    traces = load_traces()
 
     if not traces:
         st.markdown("""
         <div class="empty-state">
-          <div class="empty-icon">🔍</div>
+          <div class="empty-icon">📋</div>
           <div class="empty-title">추적 로그가 없습니다</div>
           <div class="empty-desc">파이프라인 실행 후 AI 판단 과정이 여기에 기록됩니다.</div>
         </div>
@@ -791,120 +769,110 @@ with tab_trace:
     else:
         # 요약 지표
         total           = len(traces)
-        skip_count      = sum(1 for t in traces if t.get("skipped"))
+        zero_count      = sum(1 for t in traces if t.get("no_issue_reason") == "뉴스 수집: 0건")
+        skip_count      = sum(1 for t in traces if t.get("skipped") and t.get("no_issue_reason") != "뉴스 수집: 0건")
         dup_count       = sum(1 for t in traces if t.get("is_duplicate"))
         edit_count      = sum(1 for t in traces if not t.get("review_approved", True) and not t.get("skipped"))
-        retry_total     = sum(t.get("retry_count", 0) for t in traces)
         factcheck_count = sum(1 for t in traces if not t.get("factcheck_passed", True))
         regen_count     = sum(1 for t in traces if t.get("summary_regenerated"))
-        evo_count       = sum(1 for t in traces if t.get("is_evolution"))
 
-        m1, m2, m3, m4 = st.columns(4)
-        m1.metric("분석 시간대", total)
-        m2.metric("이슈 없음", skip_count, help="AI가 주요 이슈 없음으로 판단한 시간대")
-        m3.metric("중복 감지", dup_count, help="유사 이슈로 판정되어 재선정된 횟수")
-        m4.metric("이슈 수정", edit_count, help="검토 Agent가 이슈를 수정한 횟수")
-
-        m5, m6, m7, m8 = st.columns(4)
-        m5.metric("총 재선정", retry_total, help="유사도 검사로 재시도된 총 횟수")
-        m6.metric("팩트 수정", factcheck_count, help="팩트체크 Agent가 수정한 횟수")
-        m7.metric("요약 재생성", regen_count, help="품질 미달로 AI 요약을 재생성한 횟수")
-        m8.metric("발전 이슈", evo_count, help="기존 이슈의 후속/갱신/반전으로 판단된 이슈")
+        m1, m2, m3, m4, m5, m6 = st.columns(6)
+        m1.metric("전체", total)
+        m2.metric("0건 수집", zero_count,      help="뉴스 수집이 0건이었던 시간대")
+        m3.metric("이슈 없음", skip_count,     help="AI가 주요 이슈 없음으로 판단한 시간대")
+        m4.metric("중복 재선정", dup_count,    help="유사 이슈로 재선정된 횟수")
+        m5.metric("이슈 수정", edit_count,     help="검토 Agent가 이슈를 수정한 횟수")
+        m6.metric("팩트 수정", factcheck_count, help="팩트체크에서 수정된 횟수")
 
         st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
 
-        # 필터
-        fc1, fc2, fc3 = st.columns(3)
-        with fc1:
-            only_skip = st.checkbox("이슈 없음만")
-        with fc2:
-            only_dup  = st.checkbox("중복 감지된 것만")
-        with fc3:
-            only_edit = st.checkbox("이슈 수정된 것만")
+        for t in traces:
 
-        filtered = traces
-        if only_skip:
-            filtered = [t for t in filtered if t.get("skipped")]
-        if only_dup:
-            filtered = [t for t in filtered if t.get("is_duplicate")]
-        if only_edit:
-            filtered = [t for t in filtered if not t.get("review_approved", True) and not t.get("skipped")]
+            no_reason = t.get("no_issue_reason") or ""
 
-        st.markdown(
-            f'<div style="font-size:11px;color:#4a5168;margin-bottom:8px;">{len(filtered)}건 표시 중</div>',
-            unsafe_allow_html=True,
-        )
-
-        for t in filtered:
             # 배지
             badges = ""
-            if t.get("skipped"):
-                badges += '<span class="badge-skip">— 이슈 없음</span> '
-            if t.get("is_duplicate"):
-                badges += '<span class="badge-warn">⚠ 중복 감지</span> '
-            if t.get("is_evolution"):
-                evo_label = {"update": "갱신", "reversal": "반전", "followup": "후속"}.get(
-                    t.get("evolution_type", ""), "발전"
-                )
-                badges += f'<span class="badge-edit">↑ {evo_label} 이슈</span> '
-            if not t.get("review_approved", True) and not t.get("skipped"):
-                badges += '<span class="badge-edit">✎ 이슈 수정</span> '
-            if not t.get("factcheck_passed", True):
-                badges += '<span class="badge-warn">⚑ 팩트 수정</span> '
-            if t.get("summary_regenerated"):
-                badges += '<span class="badge-edit">↺ 요약 재생성</span> '
-            if not badges:
-                badges = '<span class="badge-ok">✓ 정상</span>'
-
-            # Step 0: 사전 필터링
-            removed = t.get("step0_removed_count", 0) or 0
-            removal_reasons = t.get("step0_removal_reasons") or []
-            if isinstance(removal_reasons, str):
-                try:
-                    import json as _json
-                    removal_reasons = _json.loads(removal_reasons)
-                except Exception:
-                    removal_reasons = []
-            if removed > 0:
-                reasons_text = " · ".join(html.escape(r) for r in removal_reasons[:3])
-                s0_html = (
-                    f'<span style="color:#94a3b8">{removed}건 사전 필터링</span>'
-                    + (f'<br><span style="color:#4a5168;font-size:11px;">{reasons_text}</span>' if reasons_text else "")
-                )
+            if no_reason == "뉴스 수집: 0건":
+                badges = '<span class="badge-zero">✕ 0건 수집</span>'
+            elif t.get("skipped"):
+                badges = '<span class="badge-skip">— 이슈 없음</span>'
             else:
-                s0_html = '<span style="color:#2a2f45">필터링 없음</span>'
+                if t.get("is_duplicate"):
+                    badges += '<span class="badge-warn">⚠ 중복 재선정</span> '
+                if t.get("is_evolution"):
+                    evo_label = {"update": "갱신", "reversal": "반전", "followup": "후속"}.get(
+                        t.get("evolution_type", ""), "발전"
+                    )
+                    badges += f'<span class="badge-edit">↑ {evo_label}</span> '
+                if not t.get("review_approved", True):
+                    badges += '<span class="badge-edit">✎ 이슈 수정</span> '
+                if not t.get("factcheck_passed", True):
+                    badges += '<span class="badge-edit">✎ 팩트수정</span> '
+                if t.get("summary_regenerated"):
+                    badges += '<span class="badge-edit">↺ 요약재생성</span> '
+                if not badges:
+                    badges = '<span class="badge-ok">✓ 정상</span>'
 
-            # 입력 기사 목록
-            input_articles = t.get("input_articles") or []
-            if isinstance(input_articles, str):
-                try:
-                    import json as _json
-                    input_articles = _json.loads(input_articles)
-                except Exception:
-                    input_articles = []
-            art_rows = "".join(
-                f'<div class="trace-art-row">'
-                f'<span class="trace-art-src">[{html.escape(a.get("source",""))}]</span>'
-                f'{html.escape(a.get("title",""))}</div>'
-                for a in input_articles[:20]
-            )
-            art_block = f'<div class="trace-articles">{art_rows}</div>' if art_rows else ""
-
-            # 주요 이슈 없음 케이스: 간략 카드
-            if t.get("skipped"):
-                no_reason = html.escape(t.get("no_issue_reason") or "AI 판단: 주요 이슈 없음")
-                s1_html = (
-                    f'<span class="badge-skip">이슈 없음</span> '
-                    f'<span style="color:#e0a060;font-weight:500;">{no_reason}</span>'
-                    f'<br><span style="color:#4a5168">입력 기사 {t.get("input_article_count",0)}건 검토</span>'
-                )
+            # ── 0건 수집 케이스 ──────────────────
+            if no_reason == "뉴스 수집: 0건":
                 st.markdown(f"""
                 <div class="trace-card">
                   <div class="trace-hour">
                     <span>{t.get("hour","")}&nbsp;
-                      <span style="font-weight:400;color:#4a5168;font-size:11px;">
-                        분석: {t.get("created_at","")}
-                      </span>
+                      <span style="font-weight:400;color:#4a5168;font-size:11px;">{t.get("created_at","")}</span>
+                    </span>
+                    <span>{badges}</span>
+                  </div>
+                  <div class="trace-step">
+                    <span class="step-label step-s0">수집</span>
+                    <div class="step-content">
+                      <span style="color:#f87171;font-weight:600;">뉴스 수집: 0건</span>
+                      <span style="color:#4a5168"> — 분석 중단</span>
+                    </div>
+                  </div>
+                </div>
+                """, unsafe_allow_html=True)
+                continue
+
+            # ── Step 0: 사전 필터링 ──────────────
+            removed = t.get("step0_removed_count", 0) or 0
+            total_before = (t.get("input_article_count", 0) or 0)
+            filtered_count = total_before - removed
+
+            removal_reasons = t.get("step0_removal_reasons") or []
+            if isinstance(removal_reasons, str):
+                try:
+                    removal_reasons = json.loads(removal_reasons)
+                except Exception:
+                    removal_reasons = []
+
+            if removed > 0:
+                reasons_html = "".join(
+                    f'<div class="filter-reason">{html.escape(r)}</div>'
+                    for r in removal_reasons[:5]
+                )
+                s0_html = (
+                    f'<span style="color:#4a5168">{total_before}건 입력</span>'
+                    f' <span style="color:#4a5168">→</span> '
+                    f'<span class="badge-warn">{removed}건 제거</span>'
+                    f' <span style="color:#4a5168">({filtered_count}건 통과)</span>'
+                    + (f'<div class="diff-box">{reasons_html}</div>' if reasons_html else "")
+                )
+            else:
+                s0_html = (
+                    f'<span style="color:#4a5168">{total_before}건 입력</span>'
+                    f' <span style="color:#4a5168">→</span> '
+                    f'<span class="badge-ok">전체 통과</span>'
+                    f' <span style="color:#4a5168">({filtered_count}건)</span>'
+                )
+
+            # ── 이슈 없음 케이스 ─────────────────
+            if t.get("skipped"):
+                st.markdown(f"""
+                <div class="trace-card">
+                  <div class="trace-hour">
+                    <span>{t.get("hour","")}&nbsp;
+                      <span style="font-weight:400;color:#4a5168;font-size:11px;">{t.get("created_at","")}</span>
                     </span>
                     <span>{badges}</span>
                   </div>
@@ -917,123 +885,179 @@ with tab_trace:
                   <div class="trace-step">
                     <span class="step-label step-s1">Step 1</span>
                     <div class="step-content">
-                      <span style="color:#4a5168">이슈 선정</span><br>
-                      {s1_html}{art_block}
+                      <span class="badge-skip">이슈 없음</span>
+                      <span style="color:#e0a060;font-weight:500;margin-left:6px;">
+                        {html.escape(no_reason or "AI 판단: 주요 이슈 없음")}
+                      </span>
                     </div>
                   </div>
                 </div>
                 """, unsafe_allow_html=True)
                 continue
 
-            # Step 1
+            # ── Step 1: 관련 뉴스 ────────────────
+            key_articles = t.get("step1_key_articles") or []
+            if isinstance(key_articles, str):
+                try:
+                    key_articles = json.loads(key_articles)
+                except Exception:
+                    key_articles = []
+            # key_articles 없으면 input_articles 앞부분으로 대체
+            if not key_articles:
+                input_articles = t.get("input_articles") or []
+                if isinstance(input_articles, str):
+                    try:
+                        input_articles = json.loads(input_articles)
+                    except Exception:
+                        input_articles = []
+                key_articles = input_articles[:t.get("step1_filtered_count", 0)]
+
+            art_rows = "".join(
+                f'<div class="trace-art-row">'
+                f'<span class="trace-art-src">[{html.escape(a.get("source",""))}]</span>'
+                f'{html.escape(a.get("title",""))}</div>'
+                for a in key_articles[:15]
+            )
+            art_block = f'<div class="trace-articles">{art_rows}</div>' if art_rows else ""
+
             s1_html = (
-                f'<span class="step-issue">{html.escape(t.get("step1_issue") or "—")}</span> '
-                f'<span style="color:#4a5168">— 입력 {t.get("input_article_count",0)}건 중 '
-                f'{t.get("step1_filtered_count",0)}건 선별</span>'
+                f'<span class="step-issue">{html.escape(t.get("step1_issue") or "—")}</span>'
+                f' <span style="color:#4a5168">— 관련 기사 {t.get("step1_filtered_count",0)}건</span>'
+                f'{art_block}'
             )
 
-            # Step 1b
+            # ── Step 1b: 유사도 검사 ─────────────
             compared = t.get("compared_headlines") or []
             if isinstance(compared, str):
                 try:
-                    import json as _json
-                    compared = _json.loads(compared)
+                    compared = json.loads(compared)
                 except Exception:
                     compared = []
+
             if t.get("similarity_checked"):
                 if t.get("is_duplicate"):
+                    s1b_before = html.escape(t.get("step1_issue") or "")
+                    s1b_after  = html.escape(t.get("issue_after_dedup") or "")
+                    diff_html  = (
+                        f'<div class="diff-box">'
+                        f'<div class="diff-before">{s1b_before}</div>'
+                        f'<div class="diff-after">→ {s1b_after}</div>'
+                        f'</div>'
+                    ) if s1b_before != s1b_after else ""
                     s1b_html = (
                         f'<span class="badge-warn">중복</span> '
-                        f'유사 이슈: <span class="step-issue">{html.escape(t.get("similar_to") or "—")}</span>'
-                        f'<br><span style="color:#4a5168">근거: {html.escape(t.get("similarity_reason") or "")} '
-                        f'/ 재선정 {t.get("retry_count",0)}회 → '
-                        f'<span class="step-issue">{html.escape(t.get("issue_after_dedup") or "")}</span></span>'
+                        f'유사: <span class="step-issue">{html.escape(t.get("similar_to") or "—")}</span>'
+                        f' <span style="color:#4a5168">/ 사유: {html.escape(t.get("similarity_reason") or "")}'
+                        f' / {t.get("retry_count",0)}회 재선정</span>'
+                        f'{diff_html}'
                     )
                 elif t.get("is_evolution"):
                     evo_label = {"update": "갱신", "reversal": "반전", "followup": "후속"}.get(
                         t.get("evolution_type", ""), "발전"
                     )
                     s1b_html = (
-                        f'<span class="badge-edit">↑ {evo_label}</span> '
-                        f'기존 이슈: <span class="step-issue">{html.escape(t.get("evolution_of") or "—")}</span>'
-                        f'<br><span style="color:#4a5168">{len(compared)}개 최근 이슈와 비교</span>'
+                        f'<span class="badge-edit">↑ {evo_label} 이슈</span> '
+                        f'기존: <span class="step-issue">{html.escape(t.get("evolution_of") or "—")}</span>'
+                        f' <span style="color:#4a5168">({len(compared)}개 이슈 비교)</span>'
                     )
                 else:
                     s1b_html = (
                         f'<span class="badge-ok">통과</span> '
-                        f'<span style="color:#4a5168">{len(compared)}개 최근 이슈와 비교</span>'
+                        f'<span style="color:#4a5168">{len(compared)}개 최근 이슈와 비교 — 독립 이슈</span>'
                     )
             else:
                 s1b_html = '<span style="color:#2a2f45">비교 대상 없음 (첫 실행)</span>'
 
-            # Step 1c
+            # ── Step 1c: 검토 Agent ──────────────
             if t.get("review_approved", True):
                 s1c_html = (
                     f'<span class="badge-ok">승인</span> '
                     f'<span style="color:#4a5168">{html.escape(t.get("review_feedback") or "—")}</span>'
                 )
             else:
+                before_r = html.escape(t.get("issue_after_dedup") or t.get("step1_issue") or "")
+                after_r  = html.escape(t.get("issue_after_review") or "")
+                diff_html = (
+                    f'<div class="diff-box">'
+                    f'<div class="diff-before">{before_r}</div>'
+                    f'<div class="diff-after">→ {after_r}</div>'
+                    f'</div>'
+                ) if before_r != after_r else ""
                 s1c_html = (
                     f'<span class="badge-edit">수정</span> '
-                    f'<span class="step-issue">{html.escape(t.get("issue_after_review") or "")}</span>'
-                    f'<br><span style="color:#4a5168">사유: {html.escape(t.get("review_feedback") or "")}</span>'
+                    f'<span style="color:#4a5168">사유: {html.escape(t.get("review_feedback") or "")}</span>'
+                    f'{diff_html}'
                 )
 
-            # Step 2
+            # ── Step 2: 심층 분석 ────────────────
             s2_html = (
                 f'<span style="color:#60a5fa;font-size:11px;">[{html.escape(t.get("final_sector") or "")}]</span> '
                 f'<span class="step-issue">{html.escape(t.get("final_headline") or "")}</span>'
             )
 
-            # Step 2b: 팩트체크
+            # ── Step 2b: 팩트체크 ────────────────
             fc_corrections = t.get("factcheck_corrections") or []
             if isinstance(fc_corrections, str):
                 try:
-                    import json as _json
-                    fc_corrections = _json.loads(fc_corrections)
+                    fc_corrections = json.loads(fc_corrections)
                 except Exception:
                     fc_corrections = []
+
             if not t.get("factcheck_passed", True):
-                headline_before = html.escape(t.get("headline_before_factcheck") or "")
-                corrections_text = " · ".join(html.escape(c) for c in fc_corrections[:3])
+                before_fc = html.escape(t.get("headline_before_factcheck") or "")
+                after_fc  = html.escape(t.get("final_headline") or "")
+                corr_html = "".join(
+                    f'<div class="filter-reason">{html.escape(c)}</div>'
+                    for c in fc_corrections[:5]
+                )
+                diff_html = (
+                    f'<div class="diff-box">'
+                    f'<div class="diff-before">{before_fc}</div>'
+                    f'<div class="diff-after">→ {after_fc}</div>'
+                    f'</div>'
+                ) if before_fc and before_fc != after_fc else ""
                 s2b_html = (
-                    f'<span class="badge-warn">수정됨</span> '
-                    f'<span style="color:#4a5168">원문: {headline_before}</span>'
-                    + (f'<br><span style="color:#4a5168;font-size:11px;">수정: {corrections_text}</span>' if corrections_text else "")
+                    f'<span class="badge-edit">수정</span>'
+                    + (f'<div class="diff-box" style="margin-top:4px;">{corr_html}</div>' if corr_html else "")
+                    + diff_html
                 )
             else:
-                s2b_html = '<span class="badge-ok">통과</span> <span style="color:#4a5168">시제·수치 이상 없음</span>'
+                s2b_html = '<span class="badge-ok">통과</span> <span style="color:#4a5168">수정 없음</span>'
 
-            # Step 2c: ai_summary 품질 검토
+            # ── Step 2c: 요약 품질 ───────────────
             quality_feedback = html.escape(t.get("summary_quality_feedback") or "")
             if t.get("summary_regenerated"):
                 s2c_html = (
                     f'<span class="badge-edit">재생성</span> '
-                    + (f'<span style="color:#4a5168">{quality_feedback}</span>' if quality_feedback else "")
+                    f'<span style="color:#4a5168">미달 사유: {quality_feedback}</span>'
                 )
             else:
                 s2c_html = (
                     f'<span class="badge-ok">통과</span> '
-                    + (f'<span style="color:#4a5168">{quality_feedback}</span>' if quality_feedback else
-                       '<span style="color:#4a5168">품질 기준 충족</span>')
+                    + (f'<span style="color:#4a5168">{quality_feedback}</span>' if quality_feedback
+                       else '<span style="color:#4a5168">품질 기준 충족</span>')
                 )
 
-            # Scoring
+            # ── Scoring ──────────────────────────
             score = t.get("impact_score", 0) or 0
             score_reason = html.escape(t.get("impact_score_reason") or "")
-            score_color = "#34d399" if score >= 7 else "#fbbf24" if score >= 4 else "#94a3b8"
+            score_color = (
+                "#f87171" if score >= 8 else
+                "#fb923c" if score >= 6 else
+                "#fbbf24" if score >= 4 else
+                "#94a3b8"
+            )
             s_score_html = (
-                f'<span style="color:{score_color};font-weight:700;font-size:13px;">{score}/10</span> '
-                + (f'<span style="color:#4a5168">{score_reason}</span>' if score_reason else "")
+                f'<span style="color:{score_color};font-weight:700;font-size:13px;">{score}</span>'
+                f'<span style="color:#4a5168;font-size:11px;">/10</span>'
+                + (f' <span style="color:#4a5168">{score_reason}</span>' if score_reason else "")
             )
 
             st.markdown(f"""
             <div class="trace-card">
               <div class="trace-hour">
                 <span>{t.get("hour","")}&nbsp;
-                  <span style="font-weight:400;color:#4a5168;font-size:11px;">
-                    분석: {t.get("created_at","")}
-                  </span>
+                  <span style="font-weight:400;color:#4a5168;font-size:11px;">{t.get("created_at","")}</span>
                 </span>
                 <span>{badges}</span>
               </div>
@@ -1046,14 +1070,13 @@ with tab_trace:
               <div class="trace-step">
                 <span class="step-label step-s1">Step 1</span>
                 <div class="step-content">
-                  <span style="color:#4a5168">이슈 선정</span><br>
-                  {s1_html}{art_block}
+                  <span style="color:#4a5168">핵심 이슈 선정</span><br>{s1_html}
                 </div>
               </div>
               <div class="trace-step">
                 <span class="step-label step-s1b">Step 1b</span>
                 <div class="step-content">
-                  <span style="color:#4a5168">유사도/발전 검사</span><br>{s1b_html}
+                  <span style="color:#4a5168">유사도 검사</span><br>{s1b_html}
                 </div>
               </div>
               <div class="trace-step">
@@ -1077,13 +1100,13 @@ with tab_trace:
               <div class="trace-step">
                 <span class="step-label step-s2c">Step 2c</span>
                 <div class="step-content">
-                  <span style="color:#4a5168">요약 품질 검토</span><br>{s2c_html}
+                  <span style="color:#4a5168">요약 품질</span><br>{s2c_html}
                 </div>
               </div>
               <div class="trace-step">
-                <span class="step-label step-score">Scoring</span>
+                <span class="step-label step-score">점수</span>
                 <div class="step-content">
-                  <span style="color:#4a5168">이슈 중요도</span><br>{s_score_html}
+                  <span style="color:#4a5168">임팩트</span><br>{s_score_html}
                 </div>
               </div>
             </div>
