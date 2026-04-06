@@ -553,6 +553,14 @@ df      = load_news()
 issues  = load_issues()
 now_kst = datetime.now(KST)
 
+# 시간대별 trace 조회 (타임라인 관련 기사 표시용)
+_traces_raw = load_traces()
+traces_by_hour: dict = {}
+for _t in _traces_raw:
+    _h = _t.get("hour", "")
+    if _h and _h not in traces_by_hour:
+        traces_by_hour[_h] = _t
+
 
 # ─────────────────────────────────────────────
 # 헤더
@@ -713,6 +721,37 @@ with tab_timeline:
                 """,
                 unsafe_allow_html=True,
             )
+
+            # 관련 기사 목록 (step1_key_articles 우선, 없으면 전체 기사)
+            trace = traces_by_hour.get(hour)
+            key_arts = []
+            if trace:
+                key_arts = trace.get("step1_key_articles") or []
+                if isinstance(key_arts, str):
+                    try:
+                        key_arts = json.loads(key_arts)
+                    except Exception:
+                        key_arts = []
+            # key_articles 없으면 DB 기사로 대체
+            if not key_arts:
+                key_arts = [
+                    {"source": a.get("source", ""), "title": a.get("title", ""), "link": a.get("link", "")}
+                    for a in articles
+                ]
+            if key_arts:
+                with st.expander(f"관련 기사 {len(key_arts)}건"):
+                    for art in key_arts:
+                        link  = art.get("link", "#") or "#"
+                        title = art.get("title", "")
+                        src   = art.get("source", "")
+                        st.markdown(
+                            f'<div style="padding:5px 0;border-bottom:1px solid #1e2130;">'
+                            f'<span class="art-source">[{src}]</span> '
+                            + (f'<a href="{link}" target="_blank" class="art-link">{title}</a>'
+                               if link and link != "#" else f'<span class="art-link">{title}</span>')
+                            + f'</div>',
+                            unsafe_allow_html=True,
+                        )
 
         elif len(articles) > 0:
             st.markdown(
