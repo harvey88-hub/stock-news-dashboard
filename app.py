@@ -413,7 +413,7 @@ def load_issues() -> dict:
 @st.cache_data(ttl=300)
 def load_traces() -> list:
     client = get_supabase()
-    cutoff = (datetime.now(KST) - timedelta(hours=48)).strftime("%Y-%m-%d %H:%M")
+    cutoff = (datetime.now(KST) - timedelta(hours=24)).strftime("%Y-%m-%d %H:%M")
     try:
         result = (
             client.table("analysis_traces")
